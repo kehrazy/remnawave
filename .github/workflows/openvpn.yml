@@ -64,6 +64,7 @@ jobs:
             sleep 10
           done
           gh release view "openvpn-${sha}" --repo kehrazy/remnawave-frontend
+          echo "sha=${sha}" >> "$GITHUB_OUTPUT"
           echo "url=https://github.com/kehrazy/remnawave-frontend/releases/download/openvpn-${sha}/remnawave-frontend.zip" >> "$GITHUB_OUTPUT"
       - uses: docker/setup-buildx-action@v4
       - uses: docker/build-push-action@v7
@@ -71,6 +72,7 @@ jobs:
           context: .
           build-args: |
             FRONTEND_URL=${{ steps.frontend.outputs.url }}
+            __RW_METADATA_GIT_FRONTEND_COMMIT=${{ steps.frontend.outputs.sha }}
             __RW_METADATA_GIT_BACKEND_COMMIT=${{ github.sha }}
             __RW_METADATA_GIT_BRANCH=openvpn
           tags: remnawave-openvpn:${{ github.sha }}
