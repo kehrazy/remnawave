@@ -1,6 +1,9 @@
 import { Module } from '@nestjs/common';
 import { CqrsModule } from '@nestjs/cqrs';
 
+import { ManagedVpnModule } from '@common/vpn/managed-vpn.module';
+import { NativeVpnModule } from '@common/vpn/native-vpn.module';
+
 import { ConfigProfileController } from './config-profile.controller';
 import { ConfigProfileService } from './config-profile.service';
 import { ConfigProfileConverter, SnippetsConverter } from './converters';
@@ -11,7 +14,7 @@ import { SnippetsController } from './snippets.controller';
 import { SnippetsService } from './snippets.service';
 
 @Module({
-    imports: [CqrsModule],
+    imports: [CqrsModule, NativeVpnModule, ManagedVpnModule],
     controllers: [ConfigProfileController, SnippetsController],
     providers: [
         ConfigProfileRepository,

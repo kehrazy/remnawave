@@ -206,9 +206,9 @@ export const ERRORS = {
         message: 'Get one node error',
         httpCode: 500,
     },
-    NODE_HAS_OPENVPN_ENDPOINTS: {
+    NODE_HAS_VPN_LISTENERS: {
         code: 'A259',
-        message: 'Remove the node managed VPN endpoints before deleting it',
+        message: 'Unassign this node’s VPN listeners before deleting it',
         httpCode: 409,
     },
     DELETE_NODE_ERROR: {

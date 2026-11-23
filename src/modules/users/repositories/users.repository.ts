@@ -1175,7 +1175,9 @@ export class UsersRepository {
                             'configProfileInbounds.security',
                             'configProfileInbounds.port',
                             'configProfileInbounds.rawInbound',
+                            'configProfileInbounds.relayTargetHostUuid',
                         ])
+                        .where('configProfileInbounds.type', 'not in', ['openvpn', 'amneziawg'])
                         .whereRef('internalSquadMembers.userId', '=', 'users.id'),
                 )
                     .$notNull()
@@ -1228,7 +1230,9 @@ export class UsersRepository {
                             'configProfileInbounds.security',
                             'configProfileInbounds.port',
                             'configProfileInbounds.rawInbound',
+                            'configProfileInbounds.relayTargetHostUuid',
                         ])
+                        .where('configProfileInbounds.type', 'not in', ['openvpn', 'amneziawg'])
                         .whereRef('internalSquadMembers.userId', '=', 'users.id'),
                 )
                     .$notNull()

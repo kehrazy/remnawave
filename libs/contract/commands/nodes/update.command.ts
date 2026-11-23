@@ -17,6 +17,7 @@ export namespace UpdateNodeCommand {
     export const RequestBodySchema = NodesSchema.pick({
         uuid: true,
     }).extend({
+        nativeInbounds: z.array(z.uuid()).optional(),
         name: z.optional(z.string().min(3).max(30)),
         address: z.optional(z.string().min(2)),
         port: z.optional(z.number().min(1).max(65535)),
@@ -51,6 +52,7 @@ export namespace UpdateNodeCommand {
                 activeConfigProfileUuid: z.uuid(),
                 activeInbounds: z.array(z.uuid()),
             })
+            .nullable()
             .optional(),
 
         providerUuid: z.uuid().nullish(),

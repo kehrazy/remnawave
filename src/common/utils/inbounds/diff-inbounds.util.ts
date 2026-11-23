@@ -1,6 +1,7 @@
 import isEqual from 'lodash/isEqual';
 
 export interface IInboundSource {
+    relayTargetHostUuid?: string | null;
     network: string | null;
     port: number | null;
     rawInbound: unknown;
@@ -20,6 +21,7 @@ export interface IInboundsDiff<TExisting, TIncoming> {
 }
 
 const hasChanges = (existing: IInboundSource, incoming: IInboundSource): boolean =>
+    (existing.relayTargetHostUuid ?? null) !== (incoming.relayTargetHostUuid ?? null) ||
     existing.network !== incoming.network ||
     existing.security !== incoming.security ||
     existing.port !== incoming.port ||
@@ -55,6 +57,9 @@ export function diffInbounds<TExisting extends IInboundRecord, TIncoming extends
 
         toUpdate.push(
             Object.assign({}, existingInbound, {
+                ...(incomingInbound.relayTargetHostUuid !== undefined
+                    ? { relayTargetHostUuid: incomingInbound.relayTargetHostUuid }
+                    : {}),
                 network: incomingInbound.network,
                 port: incomingInbound.port,
                 rawInbound: incomingInbound.rawInbound,

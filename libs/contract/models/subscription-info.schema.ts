@@ -1,5 +1,18 @@
 import { z } from 'zod';
 
+import { VpnEngineSchema } from './native-vpn.schema';
+
+export const ConnectionProfileSchema = z.object({
+    id: z.string(),
+    engine: VpnEngineSchema,
+    format: z.enum(['uri', 'ovpn', 'conf']),
+    name: z.string(),
+    url: z.string(),
+    transport: z.string().nullable(),
+    generation: z.string().nullable(),
+});
+export type ConnectionProfile = z.infer<typeof ConnectionProfileSchema>;
+
 import { RESET_PERIODS, USERS_STATUS } from '../constants';
 
 export const SubscriptionInfoSchema = z.object({
@@ -20,9 +33,14 @@ export const SubscriptionInfoSchema = z.object({
         trafficLimitStrategy: z.enum(RESET_PERIODS),
     }),
     links: z.array(z.string()),
+    connectionProfiles: z.array(ConnectionProfileSchema).default([]),
     ssConfLinks: z.record(z.string(), z.string()),
     subscriptionUrl: z.string(),
-    amneziaWgProfiles: z.array(z.object({ uuid: z.uuid(), name: z.string(), generation: z.string(), url: z.string() })).optional(),
+    amneziaWgProfiles: z
+        .array(
+            z.object({ uuid: z.uuid(), name: z.string(), generation: z.string(), url: z.string() }),
+        )
+        .optional(),
     openVpnProfiles: z
         .array(
             z.object({

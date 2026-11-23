@@ -2,6 +2,6 @@ import { INodeConnectionOpts } from '@common/axios';
 
 export interface INodeHealthCheckPayload {
     nodeUuid: string;
-    isConnected: boolean;
+    xrayConnected: boolean;
     connectionOpts: INodeConnectionOpts;
 }

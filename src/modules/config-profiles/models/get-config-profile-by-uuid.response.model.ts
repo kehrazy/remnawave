@@ -2,6 +2,7 @@ import { ConfigProfileWithInboundsAndNodesEntity } from '../entities';
 import { ConfigProfileInboundEntity } from '../entities/config-profile-inbound.entity';
 
 export class GetConfigProfileByUuidResponseModel {
+    public readonly engine: 'xray' | 'openvpn' | 'amneziawg';
     public readonly uuid: string;
     public readonly viewPosition: number;
     public readonly name: string;
@@ -18,6 +19,7 @@ export class GetConfigProfileByUuidResponseModel {
     public readonly updatedAt: Date;
 
     constructor(entity: ConfigProfileWithInboundsAndNodesEntity) {
+        this.engine = entity.engine as 'xray' | 'openvpn' | 'amneziawg';
         this.uuid = entity.uuid;
         this.viewPosition = entity.viewPosition;
         this.name = entity.name;

@@ -1,0 +1,15 @@
+BEGIN;
+UPDATE config_profile_inbounds SET relay_target_host_uuid=NULL WHERE type IN ('openvpn','amneziawg');
+DELETE FROM hosts WHERE config_profile_uuid IN (SELECT uuid FROM config_profiles WHERE engine IN ('openvpn','amneziawg'));
+DELETE FROM config_profiles WHERE engine IN ('openvpn','amneziawg');
+UPDATE nodes SET is_connected=xray_connected,is_connecting=xray_connecting,last_status_message=xray_last_status_message,last_status_change=xray_last_status_change;
+DELETE FROM _prisma_migrations WHERE migration_name='20261123200000_native_vpn_profiles';
+ALTER TABLE openvpn_endpoints DROP CONSTRAINT openvpn_endpoints_node_uuid_fkey;
+ALTER TABLE openvpn_endpoints ADD CONSTRAINT openvpn_endpoints_node_uuid_fkey FOREIGN KEY(node_uuid) REFERENCES nodes(uuid) ON DELETE RESTRICT ON UPDATE CASCADE;
+ALTER TABLE openvpn_endpoints DROP CONSTRAINT openvpn_endpoints_relay_target_uuid_fkey;
+ALTER TABLE openvpn_endpoints ADD CONSTRAINT openvpn_endpoints_relay_target_uuid_fkey FOREIGN KEY(relay_target_uuid) REFERENCES openvpn_endpoints(uuid) ON DELETE RESTRICT ON UPDATE CASCADE;
+ALTER TABLE amneziawg_endpoints DROP CONSTRAINT amneziawg_endpoints_node_uuid_fkey;
+ALTER TABLE amneziawg_endpoints ADD CONSTRAINT amneziawg_endpoints_node_uuid_fkey FOREIGN KEY(node_uuid) REFERENCES nodes(uuid) ON DELETE RESTRICT ON UPDATE CASCADE;
+ALTER TABLE amneziawg_endpoints DROP CONSTRAINT amneziawg_endpoints_relay_target_uuid_fkey;
+ALTER TABLE amneziawg_endpoints ADD CONSTRAINT amneziawg_endpoints_relay_target_uuid_fkey FOREIGN KEY(relay_target_uuid) REFERENCES amneziawg_endpoints(uuid) ON DELETE RESTRICT ON UPDATE CASCADE;
+COMMIT;

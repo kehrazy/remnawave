@@ -66,6 +66,8 @@ export const REST_API = {
                 `${ROOT}/${CONTROLLERS.NODES_CONTROLLER}/${CONTROLLERS.NODES_ROUTES.ACTIONS.DISABLE(
                     uuid,
                 )}`,
+            RESTART_ENGINE: (uuid: string, engine: string) =>
+                `${ROOT}/${CONTROLLERS.NODES_CONTROLLER}/${CONTROLLERS.NODES_ROUTES.ACTIONS.RESTART_ENGINE(uuid, engine)}`,
             RESTART: (uuid: string) =>
                 `${ROOT}/${CONTROLLERS.NODES_CONTROLLER}/${CONTROLLERS.NODES_ROUTES.ACTIONS.RESTART(
                     uuid,

@@ -19,7 +19,7 @@ export class CountOnlineUsersHandler implements IQueryHandler<CountOnlineUsersQu
 
     async execute() {
         try {
-            const nodes = await this.nodesRepository.findConnectedNodesPartial();
+            const nodes = await this.nodesRepository.findConnectedNodesPartial('agent');
             const usersOnline = await this.nodesSystemCacheService.getTotalOnlineUsers(nodes);
 
             return ok({ usersOnline });

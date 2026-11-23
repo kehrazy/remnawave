@@ -4,6 +4,7 @@ import { JsonArray, JsonObject } from '@prisma/client/runtime/library';
 import { ConfigProfileInboundEntity } from './config-profile-inbound.entity';
 
 export class ConfigProfileWithInboundsAndNodesEntity implements ConfigProfiles {
+    public engine: string = 'xray';
     public uuid: string;
     public viewPosition: number;
     public name: string;

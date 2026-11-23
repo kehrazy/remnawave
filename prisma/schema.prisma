@@ -121,8 +121,8 @@ model OpenVpnEndpoint {
   createdAt          DateTime @default(now()) @map("created_at")
   updatedAt          DateTime @default(now()) @updatedAt @map("updated_at")
 
-  node Nodes @relation(fields: [nodeUuid], references: [uuid], onDelete: Restrict)
-  relayTarget OpenVpnEndpoint? @relation("OpenVpnRelay", fields: [relayTargetUuid], references: [uuid], onDelete: Restrict)
+  node Nodes @relation(fields: [nodeUuid], references: [uuid], onDelete: Cascade)
+  relayTarget OpenVpnEndpoint? @relation("OpenVpnRelay", fields: [relayTargetUuid], references: [uuid], onDelete: Cascade)
   relays OpenVpnEndpoint[] @relation("OpenVpnRelay")
 
   @@unique([nodeUuid, protocol, port])
@@ -162,8 +162,8 @@ model AmneziaWgEndpoint {
   createdAt          DateTime @default(now()) @map("created_at")
   updatedAt          DateTime @default(now()) @updatedAt @map("updated_at")
 
-  node Nodes @relation(fields: [nodeUuid], references: [uuid], onDelete: Restrict)
-  relayTarget AmneziaWgEndpoint? @relation("AmneziaWgRelay", fields: [relayTargetUuid], references: [uuid], onDelete: Restrict)
+  node Nodes @relation(fields: [nodeUuid], references: [uuid], onDelete: Cascade)
+  relayTarget AmneziaWgEndpoint? @relation("AmneziaWgRelay", fields: [relayTargetUuid], references: [uuid], onDelete: Cascade)
   relays AmneziaWgEndpoint[] @relation("AmneziaWgRelay")
 
   @@unique([nodeUuid, port])
@@ -257,6 +257,10 @@ model Keygen {
 }
 
 model Nodes {
+  xrayConnected Boolean @default(false) @map("xray_connected")
+  xrayConnecting Boolean @default(false) @map("xray_connecting")
+  xrayLastStatusMessage String? @map("xray_last_status_message")
+  xrayLastStatusChange DateTime? @map("xray_last_status_change")
   id       BigInt  @unique @default(autoincrement()) @map("id")
   uuid     String  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   name     String  @unique @map("name")
@@ -409,6 +413,7 @@ model Hosts {
 
   nodes          HostsToNodes[]
   internalSquads InternalSquadHostLinks[]
+  relayInbounds ConfigProfileInbounds[] @relation("RelayTargetHost")
 
   @@map("hosts")
 }
@@ -519,6 +524,7 @@ model InternalSquadInbounds {
 }
 
 model ConfigProfiles {
+  engine       String   @default("xray") @db.VarChar(16)
   uuid         String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   viewPosition Int      @default(autoincrement()) @map("view_position")
   name         String   @unique @map("name")
@@ -536,6 +542,8 @@ model ConfigProfiles {
 }
 
 model ConfigProfileInbounds {
+  relayTargetHostUuid String? @map("relay_target_host_uuid") @db.Uuid
+  relayTargetHost Hosts? @relation("RelayTargetHost", fields: [relayTargetHostUuid], references: [uuid], onDelete: Restrict)
   uuid        String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   profileUuid String @map("profile_uuid") @db.Uuid
 
@@ -559,6 +567,8 @@ model ConfigProfileInbounds {
 }
 
 model ConfigProfileInboundsToNodes {
+  runtimeUuid String @unique @default(dbgenerated("gen_random_uuid()")) @map("runtime_uuid") @db.Uuid
+  isDisabled  Boolean @default(false) @map("is_disabled")
   configProfileInboundUuid String @map("config_profile_inbound_uuid") @db.Uuid
   nodeUuid                 String @map("node_uuid") @db.Uuid
 

@@ -4,14 +4,12 @@ import semver from 'semver';
 import { Processor, WorkerHost } from '@nestjs/bullmq';
 import { Logger } from '@nestjs/common';
 import { CommandBus, QueryBus } from '@nestjs/cqrs';
-import { EventEmitter2 } from '@nestjs/event-emitter';
 
 import { AxiosService } from '@common/axios/axios.service';
 import { RawCacheService } from '@common/raw-cache';
 import { formatExecutionTime, getTime } from '@common/utils/get-elapsed-time';
-import { CACHE_KEYS, CACHE_KEYS_TTL, EVENTS } from '@libs/contracts/constants';
+import { CACHE_KEYS, CACHE_KEYS_TTL } from '@libs/contracts/constants';
 
-import { NodeEvent } from '@integration-modules/notifications/interfaces';
 
 import { GetResolvedIntegrationsQuery } from '@modules/node-integrations/queries/get-resolved-integrations';
 import { mergeNodeIntegrations } from '@modules/node-integrations/utils';
@@ -35,7 +33,6 @@ export class StartNodeProcessor extends WorkerHost {
         private readonly axios: AxiosService,
         private readonly nodesQueuesService: NodesQueuesService,
         private readonly queryBus: QueryBus,
-        private readonly eventEmitter: EventEmitter2,
         private readonly commandBus: CommandBus,
         private readonly rawCacheService: RawCacheService,
     ) {
@@ -55,7 +52,7 @@ export class StartNodeProcessor extends WorkerHost {
 
             const { response: node } = nodeCheckup;
 
-            if (node.isConnecting) {
+            if (node.xrayConnecting) {
                 return;
             }
 
@@ -73,12 +70,11 @@ export class StartNodeProcessor extends WorkerHost {
                 await this.commandBus.execute(
                     new UpdateNodeCommand({
                         uuid: node.uuid,
-                        isDisabled: true,
                         activeConfigProfileUuid: null,
-                        isConnecting: false,
-                        isConnected: false,
-                        lastStatusMessage: null,
-                        lastStatusChange: new Date(),
+                        xrayConnecting: false,
+                        xrayConnected: false,
+                        xrayLastStatusMessage: null,
+                        xrayLastStatusChange: new Date(),
                     }),
                 );
 
@@ -93,7 +89,7 @@ export class StartNodeProcessor extends WorkerHost {
             await this.commandBus.execute(
                 new UpdateNodeCommand({
                     uuid: node.uuid,
-                    isConnecting: true,
+                    xrayConnecting: true,
                 }),
             );
 
@@ -107,10 +103,10 @@ export class StartNodeProcessor extends WorkerHost {
                 await this.commandBus.execute(
                     new UpdateNodeCommand({
                         uuid: node.uuid,
-                        lastStatusMessage: xrayStatusResponse.message ?? null,
-                        lastStatusChange: new Date(),
-                        isConnected: false,
-                        isConnecting: false,
+                        xrayLastStatusMessage: xrayStatusResponse.message ?? null,
+                        xrayLastStatusChange: new Date(),
+                        xrayConnected: false,
+                        xrayConnecting: false,
                     }),
                 );
 
@@ -125,10 +121,10 @@ export class StartNodeProcessor extends WorkerHost {
                 await this.commandBus.execute(
                     new UpdateNodeCommand({
                         uuid: node.uuid,
-                        lastStatusMessage: `Outdated version ${xrayStatusResponse.response.nodeVersion} of Remnawave Node. Please upgrade to the latest version (>= 2.7.0).`,
-                        lastStatusChange: new Date(),
-                        isConnected: false,
-                        isConnecting: false,
+                        xrayLastStatusMessage: `Outdated version ${xrayStatusResponse.response.nodeVersion} of Remnawave Node. Please upgrade to the latest version (>= 2.7.0).`,
+                        xrayLastStatusChange: new Date(),
+                        xrayConnected: false,
+                        xrayConnecting: false,
                     }),
                 );
 
@@ -177,10 +173,10 @@ export class StartNodeProcessor extends WorkerHost {
                 await this.commandBus.execute(
                     new UpdateNodeCommand({
                         uuid: node.uuid,
-                        isConnecting: false,
-                        isConnected: false,
-                        lastStatusMessage: `Failed to sync node plugins: ${syncNodePluginsResponse.message}`,
-                        lastStatusChange: new Date(),
+                        xrayConnecting: false,
+                        xrayConnected: false,
+                        xrayLastStatusMessage: `Failed to sync node plugins: ${syncNodePluginsResponse.message}`,
+                        xrayLastStatusChange: new Date(),
                     }),
                 );
 
@@ -249,10 +245,10 @@ export class StartNodeProcessor extends WorkerHost {
                 await this.commandBus.execute(
                     new UpdateNodeCommand({
                         uuid: node.uuid,
-                        lastStatusMessage: startNodeResult.message ?? null,
-                        lastStatusChange: new Date(),
-                        isConnected: false,
-                        isConnecting: false,
+                        xrayLastStatusMessage: startNodeResult.message ?? null,
+                        xrayLastStatusChange: new Date(),
+                        xrayConnected: false,
+                        xrayConnecting: false,
                     }),
                 );
 
@@ -286,23 +282,16 @@ export class StartNodeProcessor extends WorkerHost {
             const updateNodeResult = await this.commandBus.execute(
                 new UpdateNodeCommand({
                     uuid: node.uuid,
-                    isConnected: nodeResponse.isStarted,
-                    lastStatusMessage: nodeResponse.error ?? null,
-                    lastStatusChange: new Date(),
-                    isConnecting: false,
+                    xrayConnected: nodeResponse.isStarted,
+                    xrayLastStatusMessage: nodeResponse.error ?? null,
+                    xrayLastStatusChange: new Date(),
+                    xrayConnecting: false,
                 }),
             );
 
             if (!updateNodeResult.isOk) {
                 this.logger.error(`Failed to update node ${node.uuid}`);
                 return;
-            }
-
-            if (!node.isConnected && nodeResponse.isStarted) {
-                this.eventEmitter.emit(
-                    EVENTS.NODE.CONNECTION_RESTORED,
-                    new NodeEvent(updateNodeResult.response, EVENTS.NODE.CONNECTION_RESTORED),
-                );
             }
 
             return;

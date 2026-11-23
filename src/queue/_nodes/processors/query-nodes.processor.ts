@@ -75,8 +75,8 @@ export class QueryNodesQueueProcessor extends WorkerHost implements OnApplicatio
             const findNodesByCriteriaResult = await this.queryBus.execute(
                 new FindNodesByCriteriaQuery({
                     isDisabled: false,
-                    isConnected: true,
-                    isConnecting: false,
+                    xrayConnected: true,
+                    xrayConnecting: false,
                 }),
             );
 
@@ -182,7 +182,7 @@ export class QueryNodesQueueProcessor extends WorkerHost implements OnApplicatio
                 };
             }
 
-            if (!nodeResult.response.isConnected) {
+            if (!nodeResult.response.xrayConnected) {
                 return {
                     success: false,
                     nodeUuid: job.data.nodeUuid,
@@ -279,7 +279,7 @@ export class QueryNodesQueueProcessor extends WorkerHost implements OnApplicatio
                 new GetNodeByUuidQuery(job.data.nodeUuid),
             );
 
-            if (!nodeResult.isOk || !nodeResult.response.isConnected) {
+            if (!nodeResult.isOk || !nodeResult.response.xrayConnected) {
                 return;
             }
 

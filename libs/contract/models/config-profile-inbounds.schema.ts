@@ -2,6 +2,7 @@ import { z } from 'zod';
 
 export const ConfigProfileInboundsSchema = z.object({
     uuid: z.uuid(),
+    relayTargetHostUuid: z.uuid().nullable().default(null),
     profileUuid: z.uuid(),
     tag: z.string(),
     type: z.string(),

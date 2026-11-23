@@ -2,7 +2,7 @@ import { z } from 'zod';
 
 import { CONFIG_PROFILES_ROUTES, REST_API } from '../../api';
 import { getEndpointDetails } from '../../constants';
-import { ConfigProfileSchema } from '../../models';
+import { ConfigProfileSchema, VpnEngineSchema } from '../../models';
 
 export namespace CreateConfigProfileCommand {
     export const url = REST_API.CONFIG_PROFILES.CREATE;
@@ -16,6 +16,7 @@ export namespace CreateConfigProfileCommand {
     );
 
     export const RequestBodySchema = z.object({
+        engine: VpnEngineSchema.default('xray'),
         name: z
             .string()
             .min(2, 'Name must be at least 2 characters')

@@ -108,7 +108,7 @@ export class NodesQueuesService implements OnApplicationBootstrap {
                     name: NODES_JOB_NAMES.NODE_HEALTH_CHECK,
                     data: {
                         nodeUuid: node.uuid,
-                        isConnected: node.isConnected,
+                        xrayConnected: node.xrayConnected,
                         connectionOpts: node.connectionOpts,
                     } satisfies INodeHealthCheckPayload,
                     opts: {

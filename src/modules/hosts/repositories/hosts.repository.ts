@@ -232,6 +232,7 @@ export class HostsRepository implements ICrud<HostsEntity> {
         return await this.qb.kysely
             .selectFrom('configProfileInbounds')
             .select(['uuid', 'rawInbound', 'tag'])
+            .where('type', 'not in', ['openvpn', 'amneziawg'])
             .where(
                 'uuid',
                 'in',

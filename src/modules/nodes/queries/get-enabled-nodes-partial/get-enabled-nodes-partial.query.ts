@@ -5,7 +5,7 @@ import { TResult } from '@common/types';
 
 export interface IGetEnabledNodesPartialResponse {
     uuid: string;
-    isConnected: boolean;
+    xrayConnected: boolean;
     connectionOpts: INodeConnectionOpts;
 }
 

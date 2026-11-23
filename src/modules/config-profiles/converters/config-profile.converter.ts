@@ -13,6 +13,7 @@ const modelToEntity = (model: ConfigProfiles): ConfigProfileEntity => {
 const entityToModel = (entity: ConfigProfileEntity): ConfigProfiles => {
     return {
         uuid: entity.uuid,
+        engine: entity.engine,
         viewPosition: entity.viewPosition,
         name: entity.name,
         tags: entity.tags,

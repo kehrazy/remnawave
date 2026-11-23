@@ -3,12 +3,16 @@ import { CACHE_KEYS } from '@contract/constants';
 import { Injectable } from '@nestjs/common';
 
 import { RawCacheService } from '@common/raw-cache';
+import { NativeVpnService } from '@common/vpn/native-vpn.service';
 
-import { INodeHotCache, INodeSystem, INodeVersions } from './interfaces';
+import { INodeHotCache } from './interfaces';
 
 @Injectable()
 export class NodesSystemCacheService {
-    constructor(private readonly rawCacheService: RawCacheService) {}
+    constructor(
+        private readonly rawCacheService: RawCacheService,
+        private readonly nativeVpn: NativeVpnService,
+    ) {}
 
     async getMany(nodes: { uuid: string }[]): Promise<Map<string, INodeHotCache>> {
         const pipe = this.rawCacheService.createPipeline();
@@ -20,7 +24,10 @@ export class NodesSystemCacheService {
             pipe.get(CACHE_KEYS.NODE_XRAY_UPTIME(node.uuid));
         }
 
-        const results = await pipe.exec();
+        const [results, native] = await Promise.all([
+            pipe.exec(),
+            this.nativeVpn.nodeStates(nodes.map((node) => node.uuid)),
+        ]);
         const map = new Map<string, INodeHotCache>();
 
         const KEYS_PER_NODE = 5;
@@ -32,6 +39,8 @@ export class NodesSystemCacheService {
                     versions: null,
                     xrayUptime: 0,
                     onlineUsers: 0,
+                    engines: native.get(node.uuid)?.engines ?? [],
+                    totalOnlineUsers: native.get(node.uuid)?.usersOnline ?? 0,
                 });
             }
             return map;
@@ -57,30 +66,30 @@ export class NodesSystemCacheService {
             const xrayUptime = !uptimeErr && rawUptime ? Number(rawUptime) : 0;
             const onlineUsers = !onlineErr && rawOnline ? Number(rawOnline) : 0;
 
-            map.set(nodes[i].uuid, { system, versions, xrayUptime, onlineUsers });
+            const extra = native.get(nodes[i].uuid);
+            map.set(nodes[i].uuid, {
+                system: system ?? extra?.agent?.system ?? null,
+                versions:
+                    versions ??
+                    (extra?.agent
+                        ? {
+                              node: extra.agent.agent.version,
+                              xray: extra.agent.xray?.xrayVersion ?? '',
+                          }
+                        : null),
+                xrayUptime,
+                onlineUsers,
+                engines: extra?.engines ?? [],
+                totalOnlineUsers: extra?.usersOnline ?? 0,
+                agentConnected: extra?.agent?.connected,
+            });
         }
 
         return map;
     }
 
     async getOne(uuid: string): Promise<INodeHotCache> {
-        const [info, stats, versions, xrayUptime, onlineUsers] = await Promise.all([
-            this.rawCacheService.get<INodeSystem['info']>(CACHE_KEYS.NODE_SYSTEM_INFO(uuid)),
-            this.rawCacheService.get<INodeSystem['stats']>(CACHE_KEYS.NODE_SYSTEM_STATS(uuid)),
-            this.rawCacheService.get<INodeVersions>(CACHE_KEYS.NODE_VERSIONS(uuid)),
-            this.rawCacheService.getNumber(CACHE_KEYS.NODE_XRAY_UPTIME(uuid)),
-            this.rawCacheService.getNumber(CACHE_KEYS.NODE_USERS_ONLINE(uuid)),
-        ]);
-
-        let system: INodeSystem | null = null;
-        if (info && stats) {
-            system = {
-                info: info,
-                stats: stats,
-            };
-        }
-
-        return { system, versions, xrayUptime, onlineUsers };
+        return (await this.getMany([{ uuid }])).get(uuid)!;
     }
 
     async delete(uuid: string): Promise<void> {
@@ -94,14 +103,7 @@ export class NodesSystemCacheService {
     }
 
     async getTotalOnlineUsers(nodes: { uuid: string }[]): Promise<number> {
-        const pipe = this.rawCacheService.createPipeline();
-        for (const node of nodes) {
-            pipe.get(CACHE_KEYS.NODE_USERS_ONLINE(node.uuid));
-        }
-
-        const results = await pipe.exec();
-        if (!results) return 0;
-
-        return results.reduce((sum, [err, raw]) => sum + (!err && raw ? Number(raw) : 0), 0);
+        const states = await this.nativeVpn.nodeStates(nodes.map((node) => node.uuid));
+        return [...states.values()].reduce((total, state) => total + state.usersOnline, 0);
     }
 }

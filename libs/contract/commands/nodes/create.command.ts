@@ -16,6 +16,7 @@ export namespace CreateNodeCommand {
     );
 
     export const RequestBodySchema = z.object({
+        nativeInbounds: z.array(z.uuid()).optional(),
         name: z.string().min(3).max(30),
         address: z.string().min(2),
         port: z.int().min(1).max(65535).optional(),
@@ -46,10 +47,12 @@ export namespace CreateNodeCommand {
                 .transform((n) => Number(n.toFixed(1))),
         ),
 
-        configProfile: z.object({
-            activeConfigProfileUuid: z.uuid(),
-            activeInbounds: z.array(z.uuid()),
-        }),
+        configProfile: z
+            .object({
+                activeConfigProfileUuid: z.uuid(),
+                activeInbounds: z.array(z.uuid()),
+            })
+            .optional(),
 
         providerUuid: z.uuid().nullish(),
         tags: z.optional(

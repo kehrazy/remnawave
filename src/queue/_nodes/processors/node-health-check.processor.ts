@@ -3,15 +3,12 @@ import { Job } from 'bullmq';
 import { Processor, WorkerHost } from '@nestjs/bullmq';
 import { Logger } from '@nestjs/common';
 import { CommandBus } from '@nestjs/cqrs';
-import { EventEmitter2 } from '@nestjs/event-emitter';
 
 import { GetSystemStatsCommand } from '@remnawave/node-contract';
 
 import { AxiosService, INodeConnectionOpts } from '@common/axios';
 import { RawCacheService } from '@common/raw-cache';
-import { CACHE_KEYS, CACHE_KEYS_TTL, EVENTS } from '@libs/contracts/constants';
-
-import { NodeEvent } from '@integration-modules/notifications/interfaces';
+import { CACHE_KEYS, CACHE_KEYS_TTL } from '@libs/contracts/constants';
 
 import { UpdateNodeCommand } from '@modules/nodes/commands/update-node';
 
@@ -29,7 +26,6 @@ export class NodeHealthCheckQueueProcessor extends WorkerHost {
 
     constructor(
         private readonly commandBus: CommandBus,
-        private readonly eventEmitter: EventEmitter2,
         private readonly axios: AxiosService,
         private readonly nodesQueuesService: NodesQueuesService,
         private readonly rawCacheService: RawCacheService,
@@ -38,7 +34,7 @@ export class NodeHealthCheckQueueProcessor extends WorkerHost {
     }
     async process(job: Job<INodeHealthCheckPayload>) {
         try {
-            const { nodeUuid, isConnected, connectionOpts } = job.data;
+            const { nodeUuid, xrayConnected, connectionOpts } = job.data;
 
             const attemptsLimit = 2;
             let attempts = 0;
@@ -53,7 +49,7 @@ export class NodeHealthCheckQueueProcessor extends WorkerHost {
                         return await this.handleConnectedNode(
                             connectionOpts,
                             nodeUuid,
-                            isConnected,
+                            xrayConnected,
                             statResult.response,
                         );
                     case false:
@@ -76,7 +72,7 @@ export class NodeHealthCheckQueueProcessor extends WorkerHost {
                 }
             }
 
-            return await this.handleDisconnectedNode(nodeUuid, isConnected, message);
+            return await this.handleDisconnectedNode(nodeUuid, xrayConnected, message);
         } catch (error) {
             this.logger.error(
                 `Error handling "${NODES_JOB_NAMES.NODE_HEALTH_CHECK}" job: ${error}`,
@@ -88,7 +84,7 @@ export class NodeHealthCheckQueueProcessor extends WorkerHost {
     private async handleConnectedNode(
         connectionOpts: INodeConnectionOpts,
         nodeUuid: string,
-        isConnected: boolean,
+        xrayConnected: boolean,
         stats: GetSystemStatsCommand.Response['response'],
     ) {
         if (stats.xrayInfo === null) {
@@ -97,9 +93,9 @@ export class NodeHealthCheckQueueProcessor extends WorkerHost {
             await this.commandBus.execute(
                 new UpdateNodeCommand({
                     uuid: nodeUuid,
-                    isConnected: false,
-                    lastStatusChange: new Date(),
-                    lastStatusMessage: 'Required info is missing. Outdated version?',
+                    xrayConnected: false,
+                    xrayLastStatusChange: new Date(),
+                    xrayLastStatusMessage: 'Required info is missing. Outdated version?',
                 }),
             );
 
@@ -129,11 +125,11 @@ export class NodeHealthCheckQueueProcessor extends WorkerHost {
             this.logger.log(`Node ${nodeUuid} has ${reports} reports, collecting reports...`);
         }
 
-        if (!isConnected) {
+        if (!xrayConnected) {
             const nodeUpdatedResponse = await this.commandBus.execute(
                 new UpdateNodeCommand({
                     uuid: nodeUuid,
-                    isConnected: true,
+                    xrayConnected: true,
                 }),
             );
 
@@ -142,11 +138,6 @@ export class NodeHealthCheckQueueProcessor extends WorkerHost {
             }
 
             await this.nodesQueuesService.startNode({ nodeUuid });
-
-            this.eventEmitter.emit(
-                EVENTS.NODE.CONNECTION_RESTORED,
-                new NodeEvent(nodeUpdatedResponse.response, EVENTS.NODE.CONNECTION_RESTORED),
-            );
         }
 
         return;
@@ -154,7 +145,7 @@ export class NodeHealthCheckQueueProcessor extends WorkerHost {
 
     private async handleDisconnectedNode(
         nodeUuid: string,
-        isConnected: boolean,
+        xrayConnected: boolean,
         message: string | undefined,
     ) {
         await this.rawCacheService.delMany([
@@ -166,9 +157,9 @@ export class NodeHealthCheckQueueProcessor extends WorkerHost {
         const newNodeEntity = await this.commandBus.execute(
             new UpdateNodeCommand({
                 uuid: nodeUuid,
-                isConnected: false,
-                lastStatusChange: new Date(),
-                lastStatusMessage: message,
+                xrayConnected: false,
+                xrayLastStatusChange: new Date(),
+                xrayLastStatusMessage: message,
             }),
         );
 
@@ -177,13 +168,6 @@ export class NodeHealthCheckQueueProcessor extends WorkerHost {
         }
 
         await this.nodesQueuesService.startNode({ nodeUuid });
-
-        if (isConnected) {
-            this.eventEmitter.emit(
-                EVENTS.NODE.CONNECTION_LOST,
-                new NodeEvent(newNodeEntity.response, EVENTS.NODE.CONNECTION_LOST),
-            );
-        }
 
         this.logger.warn(
             `Lost connection to Node ${nodeUuid}, ${newNodeEntity.response.address}:${newNodeEntity.response.port}, message: ${message}`,

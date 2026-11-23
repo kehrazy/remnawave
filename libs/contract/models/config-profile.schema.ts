@@ -1,8 +1,10 @@
 import { z } from 'zod';
 
 import { ConfigProfileInboundsSchema } from './config-profile-inbounds.schema';
+import { VpnEngineSchema } from './native-vpn.schema';
 
 export const ConfigProfileSchema = z.object({
+    engine: VpnEngineSchema.default('xray'),
     uuid: z.uuid(),
     viewPosition: z.int(),
     name: z.string(),

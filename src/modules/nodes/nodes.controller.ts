@@ -25,6 +25,7 @@ import {
     ResetNodeTrafficCommand,
     RestartAllNodesCommand,
     RestartNodeCommand,
+    RestartNodeEngineCommand,
     UpdateNodeCommand,
     BulkNodesActionsCommand,
     BulkNodesUpdateCommand,
@@ -43,6 +44,7 @@ import {
     ReorderNodesBodyDto,
     ResetNodeTrafficParamDto,
     RestartNodeParamDto,
+    RestartNodeEngineParamDto,
     RestartNodeBodyDto,
     EnableNodeParamDto,
     UpdateNodeBodyDto,
@@ -62,6 +64,15 @@ import { NodesService } from './nodes.service';
 @Controller(NODES_CONTROLLER)
 export class NodesController {
     constructor(private readonly nodesService: NodesService) {}
+
+    @Endpoint({ command: RestartNodeEngineCommand, httpCode: HttpStatus.OK, type: NodeResponseDto })
+    async restartEngine(
+        @Param() param: RestartNodeEngineParamDto,
+    ): Promise<RestartNodeEngineCommand.Response> {
+        return {
+            response: errorHandler(await this.nodesService.restartEngine(param.uuid, param.engine)),
+        };
+    }
 
     @Endpoint({
         type: GetNodesTagsResponseDto,

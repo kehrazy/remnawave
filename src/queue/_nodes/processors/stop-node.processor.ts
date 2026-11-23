@@ -56,11 +56,10 @@ export class StopNodeProcessor extends WorkerHost {
                 await this.commandBus.execute(
                     new UpdateNodeCommand({
                         uuid: result.response.uuid,
-                        lastStatusMessage: null,
-                        lastStatusChange: new Date(),
-                        isConnected: false,
-                        isConnecting: false,
-                        isDisabled: true,
+                        xrayLastStatusMessage: null,
+                        xrayLastStatusChange: new Date(),
+                        xrayConnected: false,
+                        xrayConnecting: false,
                     }),
                 );
             }

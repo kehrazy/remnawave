@@ -1,16 +1,8 @@
 import { Module } from '@nestjs/common';
 
-import { ManagedVpnModule } from '@common/vpn/managed-vpn.module';
+import { NativeVpnModule } from '@common/vpn/native-vpn.module';
 
-import { AxiosModule } from '@common/axios';
+import { OpenVpnSubscriptionController } from './openvpn.controller';
 
-import { OpenVpnController, OpenVpnSubscriptionController } from './openvpn.controller';
-import { OpenVpnService } from './openvpn.service';
-
-@Module({
-    imports: [AxiosModule, ManagedVpnModule],
-    controllers: [OpenVpnController, OpenVpnSubscriptionController],
-    providers: [OpenVpnService],
-    exports: [OpenVpnService],
-})
+@Module({ imports: [NativeVpnModule], controllers: [OpenVpnSubscriptionController] })
 export class OpenVpnModule {}

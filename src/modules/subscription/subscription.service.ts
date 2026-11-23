@@ -12,6 +12,7 @@ import { prettyBytesUtil } from '@common/utils/bytes/pretty-bytes.util';
 import { hasContent } from '@common/utils/convert-type';
 import { HwidHeaders } from '@common/utils/extract-hwid-headers';
 import { TemplateEngine } from '@common/utils/templates/replace-templates-values';
+import { NativeVpnService } from '@common/vpn/native-vpn.service';
 import { ERRORS, EVENTS, TSubscriptionTemplateType, USERS_STATUS } from '@libs/contracts/constants';
 import { THwidSettings } from '@libs/contracts/models';
 
@@ -33,8 +34,6 @@ import { RenderTemplatesService } from '@modules/subscription-template/render-te
 import { ResolvedProxyConfig } from '@modules/subscription-template/resolve-proxy/interfaces';
 import { ResolveProxyConfigService } from '@modules/subscription-template/resolve-proxy/resolve-proxy-config.service';
 import { UserEntity } from '@modules/users/entities/user.entity';
-import { AmneziaWgService } from '@modules/amneziawg/amneziawg.service';
-import { OpenVpnService } from '@modules/openvpn/openvpn.service';
 import { GetFullUserResponseModel } from '@modules/users/models';
 import { GetUserByUniqueFieldQuery } from '@modules/users/queries/get-user-by-unique-field';
 import { GetUserSubpageConfigQuery } from '@modules/users/queries/get-user-subpage-config';
@@ -75,8 +74,7 @@ export class SubscriptionService {
         private readonly xrayGeneratorService: XrayGeneratorService,
         private readonly usersQueuesService: UsersQueuesService,
         private readonly srrMatcher: ResponseRulesMatcherService,
-        private readonly openVpnService: OpenVpnService,
-        private readonly amneziaWgService: AmneziaWgService,
+        private readonly nativeVpn: NativeVpnService,
     ) {
         this.subPublicDomain = this.configService.getOrThrow('SUB_PUBLIC_DOMAIN');
     }
@@ -541,7 +539,50 @@ export class SubscriptionService {
         links: string[],
         ssConfLinks: Record<string, string>,
     ): Promise<SubscriptionRawResponse> {
+        const [openVpnProfiles, amneziaWgProfiles] = await Promise.all([
+            this.nativeVpn.profiles('openvpn', user.shortUuid),
+            this.nativeVpn.profiles('amneziawg', user.shortUuid),
+        ]);
+        const subscriptionUrl = this.resolveSubscriptionUrl(user.shortUuid);
+        const connectionProfiles = links.map((url, index) => {
+            let name = url.split('#')[1] ?? 'Xray';
+            try {
+                name = decodeURIComponent(name);
+            } catch {
+                name = 'Xray';
+            }
+            return {
+                id: 'xray:' + index,
+                engine: 'xray' as const,
+                format: 'uri' as const,
+                name,
+                url,
+                transport: null,
+                generation: null,
+            };
+        });
         return new SubscriptionRawResponse({
+            connectionProfiles: [
+                ...connectionProfiles,
+                ...openVpnProfiles.map((profile) => ({
+                    id: profile.uuid,
+                    engine: 'openvpn' as const,
+                    format: 'ovpn' as const,
+                    name: profile.name,
+                    url: `${subscriptionUrl}/openvpn/${profile.uuid}`,
+                    transport: profile.protocol,
+                    generation: null,
+                })),
+                ...amneziaWgProfiles.map((profile) => ({
+                    id: profile.uuid,
+                    engine: 'amneziawg' as const,
+                    format: 'conf' as const,
+                    name: profile.name,
+                    url: `${subscriptionUrl}/amneziawg/${profile.uuid}`,
+                    transport: 'udp',
+                    generation: profile.generation!,
+                })),
+            ],
             isFound: true,
             user: {
                 shortUuid: user.shortUuid,
@@ -560,12 +601,15 @@ export class SubscriptionService {
             },
             links,
             ssConfLinks,
-            openVpnProfiles: (await this.openVpnService.profiles(user.shortUuid)).map((profile) => ({
+            openVpnProfiles: openVpnProfiles.map((profile) => ({
                 ...profile,
+                controlChannel: profile.controlChannel!,
                 url: `${this.resolveSubscriptionUrl(user.shortUuid)}/openvpn/${profile.uuid}`,
             })),
-            amneziaWgProfiles: (await this.amneziaWgService.profiles(user.shortUuid)).map((profile) => ({
-                ...profile, url: `${this.resolveSubscriptionUrl(user.shortUuid)}/amneziawg/${profile.uuid}`,
+            amneziaWgProfiles: amneziaWgProfiles.map((profile) => ({
+                ...profile,
+                generation: profile.generation!,
+                url: `${this.resolveSubscriptionUrl(user.shortUuid)}/amneziawg/${profile.uuid}`,
             })),
             subscriptionUrl: this.resolveSubscriptionUrl(user.shortUuid),
         });

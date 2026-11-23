@@ -35,8 +35,17 @@ jobs:
       - run: npm run migrate:generate
       - run: npm run migrate:deploy
       - run: npx tsc --noEmit
-      - run: npx tsx --test --test-concurrency=1 test/openvpn.test.ts test/amneziawg.test.ts
+      - run: npx tsx --test --test-concurrency=1 test/native-vpn.test.ts
       - run: npm run build
+      - name: Publish tested contract
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          npm run build --prefix libs/contract
+          cd libs/contract
+          npm pack --ignore-scripts
+          gh release create "openvpn-${GITHUB_SHA}" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --prerelease --title "VPN engines ${GITHUB_SHA:0:12}" --notes "Shared profiles, node services and subscription contract."
+          gh release upload "openvpn-${GITHUB_SHA}" remnawave-backend-contract-*.tgz --repo "$GITHUB_REPOSITORY"
   image:
     needs: test
     runs-on: ubuntu-latest
@@ -67,7 +76,7 @@ jobs:
           tags: remnawave-openvpn:${{ github.sha }}
           outputs: type=docker,dest=/tmp/remnawave-openvpn.tar
           cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-to: type=gha,mode=min,timeout=2m,ignore-error=true
       - name: Publish image archive
         env:
           GH_TOKEN: ${{ github.token }}
@@ -75,5 +84,4 @@ jobs:
           gzip -1 /tmp/remnawave-openvpn.tar
           cd /tmp
           sha256sum remnawave-openvpn.tar.gz > remnawave-openvpn.tar.gz.sha256
-          gh release create "openvpn-${GITHUB_SHA}" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --prerelease --title "OpenVPN ${GITHUB_SHA:0:12}" --notes "Panel image with first-class OpenVPN endpoints, profiles and accounting."
           gh release upload "openvpn-${GITHUB_SHA}" remnawave-openvpn.tar.gz remnawave-openvpn.tar.gz.sha256 --repo "$GITHUB_REPOSITORY"

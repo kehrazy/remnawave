@@ -1,15 +1,19 @@
 import { Transactional } from '@nestjs-cls/transactional';
 import { PrismaClientKnownRequestError } from '@prisma/client/runtime/library';
+import { ZodError } from 'zod';
 
-import { Injectable, Logger } from '@nestjs/common';
+import { BadRequestException, HttpException, Injectable, Logger } from '@nestjs/common';
 import { QueryBus } from '@nestjs/cqrs';
 
 import { XRayConfig } from '@common/helpers/xray-config';
 import { RawCacheService } from '@common/raw-cache';
 import { fail, ok, TResult } from '@common/types';
 import { diffInbounds } from '@common/utils/inbounds';
+import { ManagedVpnService } from '@common/vpn/managed-vpn.service';
+import { NativeVpnService } from '@common/vpn/native-vpn.service';
 import { CACHE_KEYS } from '@libs/contracts/constants';
 import { ERRORS } from '@libs/contracts/constants/errors';
+import { parseNativeVpnConfig, type VpnEngine } from '@libs/contracts/models/native-vpn.schema';
 
 import { NodesQueuesService } from '@queue/_nodes';
 
@@ -32,6 +36,8 @@ export class ConfigProfileService {
         private readonly nodesQueuesService: NodesQueuesService,
         private readonly queryBus: QueryBus,
         private readonly rawCache: RawCacheService,
+        private readonly nativeVpn: NativeVpnService,
+        private readonly vpnPolicy: ManagedVpnService,
     ) {}
 
     public async getConfigProfiles(): Promise<TResult<GetConfigProfilesResponseModel>> {
@@ -39,15 +45,23 @@ export class ConfigProfileService {
             const configProfiles = await this.configProfileRepository.getAllConfigProfiles();
 
             for (const configProfile of configProfiles) {
-                configProfile.config = new XRayConfig(
-                    configProfile.config as object,
-                ).getSortedConfig();
+                if (configProfile.engine === 'xray')
+                    configProfile.config = new XRayConfig(
+                        configProfile.config as object,
+                    ).getSortedConfig();
             }
 
             const total = await this.configProfileRepository.getTotalConfigProfiles();
 
             return ok(new GetConfigProfilesResponseModel(configProfiles, total));
         } catch (error) {
+            if (error instanceof HttpException) throw error;
+            if (error instanceof ZodError)
+                throw new BadRequestException(
+                    error.issues
+                        .map((issue) => issue.path.join('.') + ': ' + issue.message)
+                        .join('; '),
+                );
             this.logger.error(error);
             return fail(ERRORS.GET_CONFIG_PROFILES_ERROR);
         }
@@ -63,10 +77,20 @@ export class ConfigProfileService {
                 return fail(ERRORS.CONFIG_PROFILE_NOT_FOUND);
             }
 
-            configProfile.config = new XRayConfig(configProfile.config as object).getSortedConfig();
+            if (configProfile.engine === 'xray')
+                configProfile.config = new XRayConfig(
+                    configProfile.config as object,
+                ).getSortedConfig();
 
             return ok(new GetConfigProfileByUuidResponseModel(configProfile));
         } catch (error) {
+            if (error instanceof HttpException) throw error;
+            if (error instanceof ZodError)
+                throw new BadRequestException(
+                    error.issues
+                        .map((issue) => issue.path.join('.') + ': ' + issue.message)
+                        .join('; '),
+                );
             this.logger.error(error);
             return fail(ERRORS.GET_CONFIG_PROFILE_BY_UUID_ERROR);
         }
@@ -81,6 +105,9 @@ export class ConfigProfileService {
             if (!configProfile) {
                 return fail(ERRORS.CONFIG_PROFILE_NOT_FOUND);
             }
+
+            if (configProfile.engine !== 'xray')
+                return ok(new GetConfigProfileByUuidResponseModel(configProfile));
 
             const snippetsMap: Map<string, unknown> = new Map();
             const snippetsResponse = await this.queryBus.execute(new GetSnippetsQuery());
@@ -100,6 +127,13 @@ export class ConfigProfileService {
 
             return ok(new GetConfigProfileByUuidResponseModel(configProfile));
         } catch (error) {
+            if (error instanceof HttpException) throw error;
+            if (error instanceof ZodError)
+                throw new BadRequestException(
+                    error.issues
+                        .map((issue) => issue.path.join('.') + ': ' + issue.message)
+                        .join('; '),
+                );
             this.logger.error(error);
             return fail(ERRORS.GET_COMPUTED_CONFIG_PROFILE_BY_UUID_ERROR);
         }
@@ -113,7 +147,10 @@ export class ConfigProfileService {
                 return fail(ERRORS.CONFIG_PROFILE_NOT_FOUND);
             }
 
-            for (const node of configProfile.nodes) {
+            if (configProfile.engine !== 'xray')
+                await this.nativeVpn.validateProfile(uuid, { inbounds: [] });
+
+            for (const node of configProfile.engine === 'xray' ? configProfile.nodes : []) {
                 await this.nodesQueuesService.stopNode({
                     nodeUuid: node.uuid,
                     isNeedToBeDeleted: false,
@@ -125,9 +162,17 @@ export class ConfigProfileService {
             );
 
             await this.configProfileRepository.deleteByUUID(uuid);
+            if (configProfile.engine !== 'xray') await this.nativeVpn.sync();
 
             return ok(true);
         } catch (error) {
+            if (error instanceof HttpException) throw error;
+            if (error instanceof ZodError)
+                throw new BadRequestException(
+                    error.issues
+                        .map((issue) => issue.path.join('.') + ': ' + issue.message)
+                        .join('; '),
+                );
             this.logger.error(error);
             return fail(ERRORS.DELETE_CONFIG_PROFILE_BY_UUID_ERROR);
         }
@@ -136,21 +181,39 @@ export class ConfigProfileService {
     public async createConfigProfile(
         name: string,
         config: object,
+        engine: VpnEngine = 'xray',
     ): Promise<TResult<GetConfigProfileByUuidResponseModel>> {
         try {
             if (name === 'Default-Profile') {
                 return fail(ERRORS.RESERVED_CONFIG_PROFILE_NAME);
             }
 
-            const validatedConfig = new XRayConfig(config);
-            const sortedConfig = validatedConfig.getSortedConfig();
+            const native = engine === 'xray' ? null : parseNativeVpnConfig(engine, config);
+            if (native) await this.nativeVpn.validateProfile(null, native);
+            const validatedConfig = native ? null : new XRayConfig(config);
+            const sortedConfig = native ?? validatedConfig!.getSortedConfig();
 
             const profileEntity = new ConfigProfileEntity({
                 name,
+                engine,
                 config: sortedConfig as object,
             });
 
-            const inbounds = validatedConfig.getAllInbounds();
+            const inbounds = native
+                ? native.inbounds.map((inbound) => ({
+                      tag: inbound.tag,
+                      type: inbound.type,
+                      network:
+                          inbound.type === 'openvpn' && inbound.mode === 'server'
+                              ? inbound.transport
+                              : 'udp',
+                      security: inbound.type === 'openvpn' ? 'tls' : 'wireguard',
+                      port: inbound.port,
+                      rawInbound: inbound,
+                      relayTargetHostUuid:
+                          inbound.mode === 'relay' ? inbound.relayTargetUuid : null,
+                  }))
+                : validatedConfig!.getAllInbounds();
 
             const inboundsEntities = inbounds.map(
                 (inbound) =>
@@ -161,6 +224,10 @@ export class ConfigProfileService {
                         security: inbound.security,
                         port: inbound.port,
                         rawInbound: inbound.rawInbound as unknown as object,
+                        relayTargetHostUuid:
+                            'relayTargetHostUuid' in inbound
+                                ? (inbound.relayTargetHostUuid as string | null)
+                                : null,
                     }),
             );
 
@@ -171,6 +238,13 @@ export class ConfigProfileService {
 
             return await this.getConfigProfileByUUID(uuid);
         } catch (error) {
+            if (error instanceof HttpException) throw error;
+            if (error instanceof ZodError)
+                throw new BadRequestException(
+                    error.issues
+                        .map((issue) => issue.path.join('.') + ': ' + issue.message)
+                        .join('; '),
+                );
             if (
                 error instanceof PrismaClientKnownRequestError &&
                 error.code === 'P2002' &&
@@ -208,12 +282,36 @@ export class ConfigProfileService {
                 return fail(ERRORS.NAME_OR_CONFIG_REQUIRED);
             }
 
-            await this.updateConfigProfileTransactional(existingConfigProfile, uuid, name, config);
+            if (existingConfigProfile.engine === 'xray') {
+                await this.updateConfigProfileTransactional(
+                    existingConfigProfile,
+                    uuid,
+                    name,
+                    config,
+                );
+            } else {
+                await this.vpnPolicy.withConfigurationLock(async () => {
+                    if (config)
+                        await this.nativeVpn.validateProfile(
+                            uuid,
+                            parseNativeVpnConfig(
+                                existingConfigProfile.engine as 'openvpn' | 'amneziawg',
+                                config,
+                            ),
+                        );
+                    await this.updateConfigProfileTransactional(
+                        existingConfigProfile,
+                        uuid,
+                        name,
+                        config,
+                    );
+                });
+            }
 
-            if (config) {
-                // No need for now
-                // await this.commandBus.execute(new SyncActiveProfileCommand());
-
+            if (config && existingConfigProfile.engine !== 'xray') {
+                await this.nativeVpn.sync();
+            }
+            if (config && existingConfigProfile.engine === 'xray') {
                 await this.nodesQueuesService.startAllNodesByProfile({
                     profileUuid: existingConfigProfile.uuid,
                     emitter: 'updateConfigProfile',
@@ -228,6 +326,13 @@ export class ConfigProfileService {
 
             return this.getConfigProfileByUUID(existingConfigProfile.uuid);
         } catch (error) {
+            if (error instanceof HttpException) throw error;
+            if (error instanceof ZodError)
+                throw new BadRequestException(
+                    error.issues
+                        .map((issue) => issue.path.join('.') + ': ' + issue.message)
+                        .join('; '),
+                );
             this.logger.error(error);
 
             if (
@@ -264,19 +369,41 @@ export class ConfigProfileService {
         const configProfileEntity = new ConfigProfileEntity({
             uuid,
             name,
+            engine: existingConfigProfile.engine,
         });
 
         if (config) {
             const existingInbounds = existingConfigProfile.inbounds;
 
-            const validatedConfig = new XRayConfig(config);
-
-            validatedConfig.cleanInboundClients(false);
-            validatedConfig.fixIncorrectServerNames();
-            validatedConfig.validateOutbounds();
-
-            const sortedConfig = validatedConfig.getSortedConfig();
-            const inbounds = validatedConfig.getAllInbounds();
+            const native =
+                existingConfigProfile.engine === 'xray'
+                    ? null
+                    : parseNativeVpnConfig(
+                          existingConfigProfile.engine as 'openvpn' | 'amneziawg',
+                          config,
+                      );
+            const validatedConfig = native ? null : new XRayConfig(config);
+            if (validatedConfig) {
+                validatedConfig.cleanInboundClients(false);
+                validatedConfig.fixIncorrectServerNames();
+                validatedConfig.validateOutbounds();
+            }
+            const sortedConfig = native ?? validatedConfig!.getSortedConfig();
+            const inbounds = native
+                ? native.inbounds.map((inbound) => ({
+                      tag: inbound.tag,
+                      type: inbound.type,
+                      network:
+                          inbound.type === 'openvpn' && inbound.mode === 'server'
+                              ? inbound.transport
+                              : 'udp',
+                      security: inbound.type === 'openvpn' ? 'tls' : 'wireguard',
+                      port: inbound.port,
+                      rawInbound: inbound,
+                      relayTargetHostUuid:
+                          inbound.mode === 'relay' ? inbound.relayTargetUuid : null,
+                  }))
+                : validatedConfig!.getAllInbounds();
 
             const inboundsEntities = inbounds.map(
                 (inbound) =>
@@ -288,6 +415,10 @@ export class ConfigProfileService {
                         security: inbound.security,
                         port: inbound.port,
                         rawInbound: inbound.rawInbound as unknown as object,
+                        relayTargetHostUuid:
+                            'relayTargetHostUuid' in inbound
+                                ? (inbound.relayTargetHostUuid as string | null)
+                                : null,
                     }),
             );
 
@@ -317,6 +448,13 @@ export class ConfigProfileService {
 
             return ok(new GetAllInboundsResponseModel(inbounds, inbounds.length));
         } catch (error) {
+            if (error instanceof HttpException) throw error;
+            if (error instanceof ZodError)
+                throw new BadRequestException(
+                    error.issues
+                        .map((issue) => issue.path.join('.') + ': ' + issue.message)
+                        .join('; '),
+                );
             this.logger.error(error);
             return fail(ERRORS.GET_INBOUNDS_BY_PROFILE_UUID_ERROR);
         }
@@ -328,6 +466,13 @@ export class ConfigProfileService {
 
             return ok(new GetAllInboundsResponseModel(inbounds, inbounds.length));
         } catch (error) {
+            if (error instanceof HttpException) throw error;
+            if (error instanceof ZodError)
+                throw new BadRequestException(
+                    error.issues
+                        .map((issue) => issue.path.join('.') + ': ' + issue.message)
+                        .join('; '),
+                );
             this.logger.error(error);
             return fail(ERRORS.GET_ALL_INBOUNDS_ERROR);
         }
@@ -341,6 +486,13 @@ export class ConfigProfileService {
 
             return await this.getConfigProfiles();
         } catch (error) {
+            if (error instanceof HttpException) throw error;
+            if (error instanceof ZodError)
+                throw new BadRequestException(
+                    error.issues
+                        .map((issue) => issue.path.join('.') + ': ' + issue.message)
+                        .join('; '),
+                );
             this.logger.error(error);
             return fail(ERRORS.GENERIC_REORDER_ERROR);
         }
@@ -377,6 +529,13 @@ export class ConfigProfileService {
 
             return;
         } catch (error) {
+            if (error instanceof HttpException) throw error;
+            if (error instanceof ZodError)
+                throw new BadRequestException(
+                    error.issues
+                        .map((issue) => issue.path.join('.') + ': ' + issue.message)
+                        .join('; '),
+                );
             if (error instanceof Error) {
                 this.logger.error('Failed to sync inbounds:', error.message);
             } else {
@@ -392,6 +551,13 @@ export class ConfigProfileService {
 
             return ok(tags);
         } catch (error) {
+            if (error instanceof HttpException) throw error;
+            if (error instanceof ZodError)
+                throw new BadRequestException(
+                    error.issues
+                        .map((issue) => issue.path.join('.') + ': ' + issue.message)
+                        .join('; '),
+                );
             this.logger.error(error);
             return fail(ERRORS.GET_ENTITY_TAGS_ERROR);
         }
@@ -403,6 +569,13 @@ export class ConfigProfileService {
 
             return ok(updated);
         } catch (error) {
+            if (error instanceof HttpException) throw error;
+            if (error instanceof ZodError)
+                throw new BadRequestException(
+                    error.issues
+                        .map((issue) => issue.path.join('.') + ': ' + issue.message)
+                        .join('; '),
+                );
             this.logger.error(error);
             return fail(ERRORS.SET_ENTITY_TAGS_ERROR);
         }

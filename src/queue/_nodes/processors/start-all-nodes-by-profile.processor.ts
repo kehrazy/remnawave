@@ -99,12 +99,11 @@ export class StartAllNodesByProfileQueueProcessor extends WorkerHost {
                     await this.commandBus.execute(
                         new UpdateNodeCommand({
                             uuid: node.uuid,
-                            isDisabled: true,
                             activeConfigProfileUuid: null,
-                            isConnecting: false,
-                            isConnected: false,
-                            lastStatusMessage: null,
-                            lastStatusChange: new Date(),
+                            xrayConnecting: false,
+                            xrayConnected: false,
+                            xrayLastStatusMessage: null,
+                            xrayLastStatusChange: new Date(),
                         }),
                     );
 
@@ -123,7 +122,7 @@ export class StartAllNodesByProfileQueueProcessor extends WorkerHost {
                 await this.commandBus.execute(
                     new UpdateNodeCommand({
                         uuid: node.uuid,
-                        isConnecting: true,
+                        xrayConnecting: true,
                     }),
                 );
 
@@ -206,10 +205,10 @@ export class StartAllNodesByProfileQueueProcessor extends WorkerHost {
                     await this.commandBus.execute(
                         new UpdateNodeCommand({
                             uuid: node.uuid,
-                            lastStatusMessage: xrayStatusResponse.message ?? null,
-                            lastStatusChange: new Date(),
-                            isConnected: false,
-                            isConnecting: false,
+                            xrayLastStatusMessage: xrayStatusResponse.message ?? null,
+                            xrayLastStatusChange: new Date(),
+                            xrayConnected: false,
+                            xrayConnecting: false,
                         }),
                     );
 
@@ -227,11 +226,11 @@ export class StartAllNodesByProfileQueueProcessor extends WorkerHost {
                     await this.commandBus.execute(
                         new UpdateNodeCommand({
                             uuid: node.uuid,
-                            lastStatusMessage:
+                            xrayLastStatusMessage:
                                 'Unknown node version. Please upgrade Remnawave Node to the latest version.',
-                            lastStatusChange: new Date(),
-                            isConnected: false,
-                            isConnecting: false,
+                            xrayLastStatusChange: new Date(),
+                            xrayConnected: false,
+                            xrayConnecting: false,
                         }),
                     );
 
@@ -284,10 +283,10 @@ export class StartAllNodesByProfileQueueProcessor extends WorkerHost {
                         await this.commandBus.execute(
                             new UpdateNodeCommand({
                                 uuid: node.uuid,
-                                isConnecting: false,
-                                isConnected: false,
-                                lastStatusMessage: `Failed to sync node plugins: ${syncNodePluginsResponse.message}`,
-                                lastStatusChange: new Date(),
+                                xrayConnecting: false,
+                                xrayConnected: false,
+                                xrayLastStatusMessage: `Failed to sync node plugins: ${syncNodePluginsResponse.message}`,
+                                xrayLastStatusChange: new Date(),
                             }),
                         );
 
@@ -340,10 +339,10 @@ export class StartAllNodesByProfileQueueProcessor extends WorkerHost {
                         await this.commandBus.execute(
                             new UpdateNodeCommand({
                                 uuid: node.uuid,
-                                lastStatusMessage: startXrayResponse.message ?? null,
-                                lastStatusChange: new Date(),
-                                isConnected: false,
-                                isConnecting: false,
+                                xrayLastStatusMessage: startXrayResponse.message ?? null,
+                                xrayLastStatusChange: new Date(),
+                                xrayConnected: false,
+                                xrayConnecting: false,
                             }),
                         );
 
@@ -376,10 +375,10 @@ export class StartAllNodesByProfileQueueProcessor extends WorkerHost {
                         await this.commandBus.execute(
                             new UpdateNodeCommand({
                                 uuid: node.uuid,
-                                isConnected: nodeResponse.isStarted,
-                                lastStatusMessage: nodeResponse.error ?? null,
-                                lastStatusChange: new Date(),
-                                isConnecting: false,
+                                xrayConnected: nodeResponse.isStarted,
+                                xrayLastStatusMessage: nodeResponse.error ?? null,
+                                xrayLastStatusChange: new Date(),
+                                xrayConnecting: false,
                             }),
                         );
 

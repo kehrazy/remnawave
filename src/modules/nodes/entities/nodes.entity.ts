@@ -14,6 +14,10 @@ export class NodesEntity implements Nodes {
     public address: string;
     public port: null | number;
     public proxyUrl: string | null;
+    public xrayConnected: boolean = false;
+    public xrayConnecting: boolean = false;
+    public xrayLastStatusMessage: string | null = null;
+    public xrayLastStatusChange: Date | null = null;
     public isConnected: boolean;
     public isConnecting: boolean;
     public isDisabled: boolean;
@@ -37,6 +41,7 @@ export class NodesEntity implements Nodes {
     public updatedAt: Date;
 
     public activeConfigProfileUuid: string | null;
+    public activeConfigProfileName: string | null;
     public activeInbounds: ConfigProfileInboundEntity[];
 
     public providerUuid: string | null;
@@ -46,11 +51,14 @@ export class NodesEntity implements Nodes {
 
     constructor(node: Partial<INodesWithResolvedInbounds & Nodes>) {
         Object.assign(this, node);
+        this.activeConfigProfileName = node.activeConfigProfile?.name ?? null;
 
         if (node.configProfileInboundsToNodes) {
-            this.activeInbounds = node.configProfileInboundsToNodes.map(
-                (value) => new ConfigProfileInboundEntity(value.configProfileInbounds),
-            );
+            this.activeInbounds = node.configProfileInboundsToNodes
+                .filter(
+                    (value) => !['openvpn', 'amneziawg'].includes(value.configProfileInbounds.type),
+                )
+                .map((value) => new ConfigProfileInboundEntity(value.configProfileInbounds));
         } else {
             this.activeInbounds = [];
         }

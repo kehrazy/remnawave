@@ -25,6 +25,7 @@ export type INodesWithResolvedInbounds = Prisma.NodesGetPayload<{
             };
         };
         provider: true;
+        activeConfigProfile: { select: { name: true } };
     };
 }>;
 
@@ -35,6 +36,7 @@ const INCLUDE_RESOLVED_INBOUNDS = {
         },
     },
     provider: true,
+    activeConfigProfile: { select: { name: true } },
 } as const;
 
 @Injectable()
@@ -58,9 +60,9 @@ export class NodesRepository implements ICrud<NodesEntity> {
     public async findConnectedNodes(): Promise<NodesEntity[]> {
         const nodesList = await this.prisma.tx.nodes.findMany({
             where: {
-                isConnected: true,
+                xrayConnected: true,
                 isDisabled: false,
-                isConnecting: false,
+                xrayConnecting: false,
                 activeConfigProfileUuid: {
                     not: null,
                 },
@@ -71,7 +73,9 @@ export class NodesRepository implements ICrud<NodesEntity> {
         return nodesList.map((value) => new NodesEntity(value));
     }
 
-    public async findConnectedNodesPartial(): Promise<IGetOnlineNodesPartialResponse[]> {
+    public async findConnectedNodesPartial(
+        engine: 'xray' | 'agent' = 'xray',
+    ): Promise<IGetOnlineNodesPartialResponse[]> {
         const nodesList = await this.qb.kysely
             .selectFrom('nodes')
             .select([
@@ -83,10 +87,13 @@ export class NodesRepository implements ICrud<NodesEntity> {
                 'port',
                 'proxyUrl',
             ])
-            .where('isConnected', '=', true)
+            .where(engine === 'xray' ? 'xrayConnected' : 'isConnected', '=', true)
             .where('isDisabled', '=', false)
-            .where('isConnecting', '=', false)
-            .where('activeConfigProfileUuid', 'is not', null)
+            .$if(engine === 'xray', (query) =>
+                query
+                    .where('xrayConnecting', '=', false)
+                    .where('activeConfigProfileUuid', 'is not', null),
+            )
             .execute();
 
         return nodesList.map((value) => ({
@@ -105,14 +112,15 @@ export class NodesRepository implements ICrud<NodesEntity> {
     public async findEnabledNodesPartial(): Promise<IGetEnabledNodesPartialResponse[]> {
         const nodesList = await this.qb.kysely
             .selectFrom('nodes')
-            .select(['uuid', 'isConnected', 'address', 'port', 'proxyUrl'])
+            .select(['uuid', 'xrayConnected', 'address', 'port', 'proxyUrl'])
+            .where('activeConfigProfileUuid', 'is not', null)
             .where('isDisabled', '=', false)
-            .where('isConnecting', '=', false)
+            .where('xrayConnecting', '=', false)
             .execute();
 
         return nodesList.map((value) => ({
             uuid: value.uuid,
-            isConnected: value.isConnected,
+            xrayConnected: value.xrayConnected,
             connectionOpts: {
                 address: value.address,
                 port: value.port,
@@ -135,7 +143,7 @@ export class NodesRepository implements ICrud<NodesEntity> {
                 proxyUrl: true,
             },
             where: {
-                isConnected: true,
+                xrayConnected: true,
                 isDisabled: false,
                 activeConfigProfileUuid: {
                     not: null,
@@ -263,6 +271,12 @@ export class NodesRepository implements ICrud<NodesEntity> {
     public async removeInboundsFromNode(nodeUuid: string): Promise<boolean> {
         const result = await this.qb.kysely
             .deleteFrom('configProfileInboundsToNodes')
+            .where('configProfileInboundUuid', 'in', (query) =>
+                query
+                    .selectFrom('configProfileInbounds')
+                    .select('uuid')
+                    .where('type', 'not in', ['openvpn', 'amneziawg']),
+            )
             .where('nodeUuid', '=', getKyselyUuid(nodeUuid))
             .executeTakeFirst();
 
@@ -286,6 +300,12 @@ export class NodesRepository implements ICrud<NodesEntity> {
     public async removeInboundsFromNodes(nodeUuids: string[]): Promise<boolean> {
         const result = await this.qb.kysely
             .deleteFrom('configProfileInboundsToNodes')
+            .where('configProfileInboundUuid', 'in', (query) =>
+                query
+                    .selectFrom('configProfileInbounds')
+                    .select('uuid')
+                    .where('type', 'not in', ['openvpn', 'amneziawg']),
+            )
             .where(
                 'nodeUuid',
                 'in',
@@ -355,8 +375,8 @@ export class NodesRepository implements ICrud<NodesEntity> {
             .select('uuid')
             .where('activePluginUuid', '=', getKyselyUuid(pluginUuid))
             .where('isDisabled', '=', false)
-            .where('isConnected', '=', true)
-            .where('isConnecting', '=', false)
+            .where('xrayConnected', '=', true)
+            .where('xrayConnecting', '=', false)
             .execute();
 
         return result.map((value) => value.uuid);
@@ -406,7 +426,9 @@ export class NodesRepository implements ICrud<NodesEntity> {
         const result = await this.qb.kysely
             .updateTable('nodes')
             .set({
-                integrationUuids: sql<string[]>`array_remove(${sql.ref('nodes.integration_uuids')}, ${getKyselyUuid(integrationUuid)})`,
+                integrationUuids: sql<
+                    string[]
+                >`array_remove(${sql.ref('nodes.integration_uuids')}, ${getKyselyUuid(integrationUuid)})`,
             })
             .where(
                 sql<boolean>`${sql.ref('nodes.integration_uuids')} @> ARRAY[${getKyselyUuid(integrationUuid)}]`,

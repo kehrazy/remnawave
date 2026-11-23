@@ -1,8 +1,9 @@
 import { Transactional } from '@nestjs-cls/transactional';
 
-import { Injectable, Logger } from '@nestjs/common';
+import { BadRequestException, HttpException, Injectable, Logger } from '@nestjs/common';
 import { QueryBus } from '@nestjs/cqrs';
 
+import { PrismaService } from '@common/database/prisma.service';
 import { fail, ok, TResult } from '@common/types';
 import { cloneString } from '@common/utils/clone-string.util';
 import { nullifyEmpty } from '@common/utils/convert-type';
@@ -26,7 +27,54 @@ export class HostsService {
     constructor(
         private readonly hostsRepository: HostsRepository,
         private readonly queryBus: QueryBus,
+        private readonly prisma: PrismaService,
     ) {}
+
+    private async validateNativeHost(
+        inboundUuid: string | null,
+        nodeUuids: string[],
+        hostUuid?: string,
+        address?: string,
+    ): Promise<void> {
+        if (
+            hostUuid &&
+            (await this.prisma.configProfileInbounds.count({
+                where: { relayTargetHostUuid: hostUuid },
+            }))
+        ) {
+            const previous = await this.hostsRepository.findByUUID(hostUuid);
+            if (
+                previous?.configProfileInboundUuid !== inboundUuid ||
+                previous.nodes[0]?.nodeUuid !== nodeUuids[0] ||
+                nodeUuids.length !== 1
+            )
+                throw new BadRequestException(
+                    'A relay uses this server Host; update its relay profile before changing the target',
+                );
+        }
+        if (!inboundUuid) return;
+        const inbound = await this.prisma.configProfileInbounds.findUnique({
+            where: { uuid: inboundUuid },
+            include: { profile: true },
+        });
+        if (!inbound || inbound.profile.engine === 'xray') return;
+        if (address !== undefined && !/^[a-zA-Z0-9.-]{1,253}$/.test(address.trim()))
+            throw new BadRequestException('A native VPN Host needs one IPv4 address or hostname');
+        if (
+            nodeUuids.length !== 1 ||
+            !(await this.prisma.configProfileInboundsToNodes.findUnique({
+                where: {
+                    configProfileInboundUuid_nodeUuid: {
+                        configProfileInboundUuid: inboundUuid,
+                        nodeUuid: nodeUuids[0],
+                    },
+                },
+            }))
+        )
+            throw new BadRequestException(
+                'A native VPN Host must reference exactly one node assigned to its listener',
+            );
+    }
 
     public async createHost(dto: CreateHostBodyDto): Promise<TResult<HostsEntity>> {
         try {
@@ -70,6 +118,13 @@ export class HostsService {
                 return fail(ERRORS.CONFIG_PROFILE_INBOUND_NOT_FOUND_IN_SPECIFIED_PROFILE);
             }
 
+            await this.validateNativeHost(
+                configProfileInbound.uuid,
+                nodes ?? [],
+                undefined,
+                dto.address,
+            );
+
             const hostEntity = new HostsEntity({
                 ...rest,
                 address: dto.address.trim(),
@@ -107,6 +162,7 @@ export class HostsService {
 
             return ok(result);
         } catch (error) {
+            if (error instanceof HttpException) throw error;
             this.logger.error(error);
 
             return fail(ERRORS.CREATE_HOST_ERROR);
@@ -210,6 +266,13 @@ export class HostsService {
                 configProfileInboundUuid = configProfileInbound.uuid;
             }
 
+            await this.validateNativeHost(
+                configProfileInboundUuid ?? host.configProfileInboundUuid,
+                nodes ?? host.nodes.map((node) => node.nodeUuid),
+                host.uuid,
+                dto.address,
+            );
+
             if (nodes !== undefined) {
                 await this.hostsRepository.clearNodesFromHost(host.uuid);
                 await this.hostsRepository.addNodesToHost(host.uuid, nodes);
@@ -238,6 +301,7 @@ export class HostsService {
 
             return ok(result);
         } catch (error) {
+            if (error instanceof HttpException) throw error;
             this.logger.error(error);
 
             return fail(ERRORS.UPDATE_HOST_ERROR);
@@ -254,6 +318,7 @@ export class HostsService {
 
             return ok(true);
         } catch (error) {
+            if (error instanceof HttpException) throw error;
             this.logger.error(error);
             this.logger.error(JSON.stringify(error));
             return fail(ERRORS.DELETE_HOST_ERROR);
@@ -266,6 +331,7 @@ export class HostsService {
 
             return ok(result);
         } catch (error) {
+            if (error instanceof HttpException) throw error;
             this.logger.error(JSON.stringify(error));
             return fail(ERRORS.GET_ALL_HOSTS_ERROR);
         }
@@ -281,6 +347,7 @@ export class HostsService {
 
             return ok(result);
         } catch (error) {
+            if (error instanceof HttpException) throw error;
             this.logger.error(error);
             return fail(ERRORS.GET_ONE_HOST_ERROR);
         }
@@ -296,6 +363,7 @@ export class HostsService {
 
             return ok(await this.cloneHostTransactional(host));
         } catch (error) {
+            if (error instanceof HttpException) throw error;
             this.logger.error(error);
 
             return fail(ERRORS.CLONE_HOST_ERROR);
@@ -350,6 +418,7 @@ export class HostsService {
 
             return ok({ isUpdated: result });
         } catch (error) {
+            if (error instanceof HttpException) throw error;
             this.logger.error(error);
             return fail(ERRORS.REORDER_HOSTS_ERROR);
         }
@@ -361,6 +430,7 @@ export class HostsService {
 
             return ok(true);
         } catch (error) {
+            if (error instanceof HttpException) throw error;
             this.logger.error(error);
             return fail(ERRORS.DELETE_HOSTS_ERROR);
         }
@@ -372,6 +442,7 @@ export class HostsService {
 
             return ok(true);
         } catch (error) {
+            if (error instanceof HttpException) throw error;
             this.logger.error(error);
             return fail(ERRORS.BULK_ENABLE_HOSTS_ERROR);
         }
@@ -383,6 +454,7 @@ export class HostsService {
 
             return ok(true);
         } catch (error) {
+            if (error instanceof HttpException) throw error;
             this.logger.error(error);
             return fail(ERRORS.BULK_DISABLE_HOSTS_ERROR);
         }
@@ -394,6 +466,7 @@ export class HostsService {
 
             return ok(result);
         } catch (error) {
+            if (error instanceof HttpException) throw error;
             this.logger.error(error);
             return fail(ERRORS.GET_ALL_HOST_TAGS_ERROR);
         }
@@ -450,6 +523,17 @@ export class HostsService {
                 configProfileInboundUuid = configProfileInbound.uuid;
             }
 
+            for (const uuid of uuids) {
+                const host = await this.hostsRepository.findByUUID(uuid);
+                if (!host) return fail(ERRORS.HOST_NOT_FOUND);
+                await this.validateNativeHost(
+                    configProfileInboundUuid ?? host.configProfileInboundUuid,
+                    nodes ?? host.nodes.map((node) => node.nodeUuid),
+                    uuid,
+                    dto.address,
+                );
+            }
+
             if (nodes !== undefined) {
                 await this.hostsRepository.clearNodesFromHosts(uuids);
                 await this.hostsRepository.addNodesToHosts(uuids, nodes);
@@ -477,6 +561,7 @@ export class HostsService {
 
             return ok(true);
         } catch (error) {
+            if (error instanceof HttpException) throw error;
             this.logger.error(error);
             return fail(ERRORS.UPDATE_HOSTS_ERROR);
         }

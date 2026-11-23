@@ -1,16 +1,8 @@
 import { Module } from '@nestjs/common';
 
-import { ManagedVpnModule } from '@common/vpn/managed-vpn.module';
+import { NativeVpnModule } from '@common/vpn/native-vpn.module';
 
-import { AxiosModule } from '@common/axios';
+import { AmneziaWgSubscriptionController } from './amneziawg.controller';
 
-import { AmneziaWgController, AmneziaWgSubscriptionController } from './amneziawg.controller';
-import { AmneziaWgService } from './amneziawg.service';
-
-@Module({
-    imports: [AxiosModule, ManagedVpnModule],
-    controllers: [AmneziaWgController, AmneziaWgSubscriptionController],
-    providers: [AmneziaWgService],
-    exports: [AmneziaWgService],
-})
+@Module({ imports: [NativeVpnModule], controllers: [AmneziaWgSubscriptionController] })
 export class AmneziaWgModule {}

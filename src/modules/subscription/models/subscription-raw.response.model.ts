@@ -1,4 +1,5 @@
 import { TResetPeriods, TUsersStatus } from '@libs/contracts/constants';
+import { ConnectionProfile } from '@libs/contracts/models/subscription-info.schema';
 
 export class SubscriptionRawResponse {
     public isFound: boolean;
@@ -18,6 +19,7 @@ export class SubscriptionRawResponse {
         trafficLimitStrategy: TResetPeriods;
     };
     public links: string[];
+    public connectionProfiles: ConnectionProfile[];
     public ssConfLinks: Record<string, string>;
     public subscriptionUrl: string;
     public openVpnProfiles?: {
@@ -30,10 +32,15 @@ export class SubscriptionRawResponse {
 
     public amneziaWgProfiles?: { uuid: string; name: string; generation: string; url: string }[];
 
-    constructor(data: SubscriptionRawResponse) {
+    constructor(
+        data: Omit<SubscriptionRawResponse, 'connectionProfiles'> & {
+            connectionProfiles?: ConnectionProfile[];
+        },
+    ) {
         this.isFound = data.isFound;
         this.user = data.user;
         this.links = data.links || [];
+        this.connectionProfiles = data.connectionProfiles ?? [];
         this.ssConfLinks = data.ssConfLinks || {};
         this.subscriptionUrl = data.subscriptionUrl;
         this.openVpnProfiles = data.openVpnProfiles ?? [];

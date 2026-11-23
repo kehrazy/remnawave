@@ -1,7 +1,7 @@
 import { ERRORS, EVENTS, NODES_BULK_ACTIONS } from '@contract/constants';
 import { Prisma } from '@prisma/client';
 
-import { Injectable, Logger } from '@nestjs/common';
+import { HttpException, Injectable, Logger } from '@nestjs/common';
 import { CommandBus, QueryBus } from '@nestjs/cqrs';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 
@@ -9,6 +9,7 @@ import { PrismaService } from '@common/database/prisma.service';
 import { fail, ok, TResult } from '@common/types';
 import { atLeastOneDefined, mapDefined, wrapBigInt } from '@common/utils';
 import { toNano } from '@common/utils/nano';
+import { NativeVpnService } from '@common/vpn/native-vpn.service';
 
 import { NodeEvent } from '@integration-modules/notifications/interfaces';
 
@@ -41,11 +42,27 @@ export class NodesService {
         private readonly commandBus: CommandBus,
         private readonly nodesSystemCacheService: NodesSystemCacheService,
         private readonly prisma: PrismaService,
+        private readonly nativeVpn: NativeVpnService,
     ) {}
 
     public async createNode(body: CreateNodeBodyDto): Promise<TResult<NodeResponseModel>> {
         try {
-            const { configProfile, ...nodeData } = body;
+            const { configProfile, nativeInbounds, ...nodeData } = body;
+
+            if (configProfile) {
+                const profile = await this.queryBus.execute(
+                    new GetConfigProfileByUuidQuery(configProfile.activeConfigProfileUuid),
+                );
+                if (!profile.isOk || profile.response.engine !== 'xray')
+                    return fail(ERRORS.CONFIG_PROFILE_NOT_FOUND);
+                if (
+                    configProfile.activeInbounds.some(
+                        (uuid) =>
+                            !profile.response.inbounds.some((inbound) => inbound.uuid === uuid),
+                    )
+                )
+                    return fail(ERRORS.CONFIG_PROFILE_INBOUND_NOT_FOUND_IN_SPECIFIED_PROFILE);
+            }
 
             const nodeEntity = new NodesEntity({
                 ...nodeData,
@@ -56,7 +73,7 @@ export class NodesService {
                 trafficLimitBytes: wrapBigInt(nodeData.trafficLimitBytes),
                 consumptionMultiplier: mapDefined(nodeData.consumptionMultiplier, toNano),
                 nodeConsumptionMultiplier: mapDefined(nodeData.nodeConsumptionMultiplier, toNano),
-                activeConfigProfileUuid: configProfile.activeConfigProfileUuid,
+                activeConfigProfileUuid: configProfile?.activeConfigProfileUuid ?? null,
             });
 
             const result = await this.nodesRepository.create(nodeEntity);
@@ -66,7 +83,10 @@ export class NodesService {
                     new GetConfigProfileByUuidQuery(configProfile.activeConfigProfileUuid),
                 );
 
-                if (configProfileResponse.isOk) {
+                if (
+                    configProfileResponse.isOk &&
+                    configProfileResponse.response.engine === 'xray'
+                ) {
                     const inbounds = configProfileResponse.response.inbounds;
 
                     const areAllInboundsFromConfigProfile = configProfile.activeInbounds.every(
@@ -91,9 +111,17 @@ export class NodesService {
                 throw new Error('Node not found');
             }
 
-            await this.nodesQueuesService.startNode({
-                nodeUuid: node.uuid,
-            });
+            try {
+                if (nativeInbounds) await this.nativeVpn.assignInbounds(node.uuid, nativeInbounds);
+            } catch (error) {
+                if (error instanceof HttpException) throw error;
+                await this.prisma.nodes.delete({ where: { uuid: node.uuid } });
+                throw error;
+            }
+            if (node.activeConfigProfileUuid)
+                await this.nodesQueuesService.startNode({
+                    nodeUuid: node.uuid,
+                });
 
             this.eventEmitter.emit(EVENTS.NODE.CREATED, new NodeEvent(node, EVENTS.NODE.CREATED));
 
@@ -101,6 +129,7 @@ export class NodesService {
                 new NodeResponseModel(node, await this.nodesSystemCacheService.getOne(node.uuid)),
             );
         } catch (error) {
+            if (error instanceof HttpException) throw error;
             if (
                 error instanceof Prisma.PrismaClientKnownRequestError &&
                 error.code === 'P2002' &&
@@ -141,9 +170,24 @@ export class NodesService {
                 ),
             );
         } catch (error) {
+            if (error instanceof HttpException) throw error;
             this.logger.error(error);
             return fail(ERRORS.GET_ALL_NODES_ERROR);
         }
+    }
+
+    public async restartEngine(
+        uuid: string,
+        engine: 'xray' | 'openvpn' | 'amneziawg',
+    ): Promise<TResult<NodeResponseModel>> {
+        const node = await this.nodesRepository.findByUUID(uuid);
+        if (!node) return fail(ERRORS.NODE_NOT_FOUND);
+        if (node.isDisabled) return fail(ERRORS.NODE_IS_DISABLED);
+        if (engine === 'xray') {
+            if (!node.activeConfigProfileUuid) return fail(ERRORS.CONFIG_PROFILE_NOT_FOUND);
+            await this.nodesQueuesService.startNode({ nodeUuid: uuid, force: true });
+        } else await this.nativeVpn.restart(uuid, engine);
+        return this.getOneNode(uuid);
     }
 
     public async restartNode(uuid: string, force: boolean): Promise<TResult<boolean>> {
@@ -157,13 +201,16 @@ export class NodesService {
                 return fail(ERRORS.NODE_IS_DISABLED);
             }
 
-            await this.nodesQueuesService.startNode({
-                nodeUuid: node.uuid,
-                force,
-            });
+            if (node.activeConfigProfileUuid)
+                await this.nodesQueuesService.startNode({
+                    nodeUuid: node.uuid,
+                    force,
+                });
+            await this.nativeVpn.restart(uuid);
 
             return ok(true);
         } catch (error) {
+            if (error instanceof HttpException) throw error;
             this.logger.error(JSON.stringify(error));
             return fail(ERRORS.RESTART_NODE_ERROR);
         }
@@ -183,6 +230,7 @@ export class NodesService {
 
             return ok(true);
         } catch (error) {
+            if (error instanceof HttpException) throw error;
             this.logger.error(JSON.stringify(error));
             return fail(ERRORS.RESET_NODE_TRAFFIC_ERROR);
         }
@@ -197,6 +245,8 @@ export class NodesService {
                 return fail(ERRORS.ENABLED_NODES_NOT_FOUND);
             }
 
+            for (const node of nodes) await this.nativeVpn.restart(node.uuid);
+
             await this.nodesQueuesService.startAllNodes({
                 emitter: NodesService.name,
                 force: forceRestart,
@@ -204,6 +254,7 @@ export class NodesService {
 
             return ok(true);
         } catch (error) {
+            if (error instanceof HttpException) throw error;
             this.logger.error(JSON.stringify(error));
             return fail(ERRORS.RESTART_NODE_ERROR);
         }
@@ -220,6 +271,7 @@ export class NodesService {
                 new NodeResponseModel(node, await this.nodesSystemCacheService.getOne(node.uuid)),
             );
         } catch (error) {
+            if (error instanceof HttpException) throw error;
             this.logger.error(error);
             return fail(ERRORS.GET_ONE_NODE_ERROR);
         }
@@ -232,9 +284,18 @@ export class NodesService {
                 return fail(ERRORS.NODE_NOT_FOUND);
             }
 
-            if (await this.prisma.openVpnEndpoint.count({ where: { nodeUuid: node.uuid } }) ||
-                await this.prisma.amneziaWgEndpoint.count({ where: { nodeUuid: node.uuid } })) {
-                return fail(ERRORS.NODE_HAS_OPENVPN_ENDPOINTS);
+            if (
+                await this.prisma.configProfileInboundsToNodes.count({
+                    where: {
+                        nodeUuid: node.uuid,
+                        isDisabled: false,
+                        configProfileInbounds: {
+                            profile: { engine: { in: ['openvpn', 'amneziawg'] } },
+                        },
+                    },
+                })
+            ) {
+                return fail(ERRORS.NODE_HAS_VPN_LISTENERS);
             }
 
             await this.nodesQueuesService.stopNode({
@@ -248,6 +309,7 @@ export class NodesService {
 
             return ok(true);
         } catch (error) {
+            if (error instanceof HttpException) throw error;
             this.logger.error(error);
             return fail(ERRORS.DELETE_NODE_ERROR);
         }
@@ -255,7 +317,7 @@ export class NodesService {
 
     public async updateNode(body: UpdateNodeBodyDto): Promise<TResult<NodeResponseModel>> {
         try {
-            const { configProfile, ...nodeData } = body;
+            const { configProfile, nativeInbounds, ...nodeData } = body;
 
             const node = await this.nodesRepository.findByUUID(body.uuid);
             if (!node) {
@@ -263,11 +325,37 @@ export class NodesService {
             }
 
             if (configProfile) {
+                const profile = await this.queryBus.execute(
+                    new GetConfigProfileByUuidQuery(configProfile.activeConfigProfileUuid),
+                );
+                if (!profile.isOk || profile.response.engine !== 'xray')
+                    return fail(ERRORS.CONFIG_PROFILE_NOT_FOUND);
+                if (
+                    configProfile.activeInbounds.some(
+                        (uuid) =>
+                            !profile.response.inbounds.some((inbound) => inbound.uuid === uuid),
+                    )
+                )
+                    return fail(ERRORS.CONFIG_PROFILE_INBOUND_NOT_FOUND_IN_SPECIFIED_PROFILE);
+            }
+            if (nativeInbounds) await this.nativeVpn.validateAssignment(node.uuid, nativeInbounds);
+
+            if (configProfile === null) {
+                await this.nodesRepository.removeInboundsFromNode(node.uuid);
+                await this.nodesQueuesService.stopNode({
+                    nodeUuid: node.uuid,
+                    isNeedToBeDeleted: false,
+                });
+            }
+            if (configProfile) {
                 const configProfileResponse = await this.queryBus.execute(
                     new GetConfigProfileByUuidQuery(configProfile.activeConfigProfileUuid),
                 );
 
-                if (configProfileResponse.isOk) {
+                if (
+                    configProfileResponse.isOk &&
+                    configProfileResponse.response.engine === 'xray'
+                ) {
                     const inbounds = configProfileResponse.response.inbounds;
 
                     const areAllInboundsFromConfigProfile = configProfile.activeInbounds.every(
@@ -295,15 +383,18 @@ export class NodesService {
                 trafficLimitBytes: wrapBigInt(nodeData.trafficLimitBytes),
                 consumptionMultiplier: mapDefined(nodeData.consumptionMultiplier, toNano),
                 nodeConsumptionMultiplier: mapDefined(nodeData.nodeConsumptionMultiplier, toNano),
-                activeConfigProfileUuid: configProfile?.activeConfigProfileUuid,
+                activeConfigProfileUuid:
+                    configProfile === null ? null : configProfile?.activeConfigProfileUuid,
             });
 
             if (!result) {
                 return fail(ERRORS.UPDATE_NODE_ERROR);
             }
 
+            if (nativeInbounds) await this.nativeVpn.assignInbounds(result.uuid, nativeInbounds);
             if (
                 !node.isDisabled &&
+                result.activeConfigProfileUuid &&
                 atLeastOneDefined(
                     nodeData.integrationUuids,
                     nodeData.proxyUrl,
@@ -319,6 +410,7 @@ export class NodesService {
                 });
             }
 
+            await this.nativeVpn.sync();
             this.eventEmitter.emit(
                 EVENTS.NODE.MODIFIED,
                 new NodeEvent(result, EVENTS.NODE.MODIFIED),
@@ -331,6 +423,7 @@ export class NodesService {
                 ),
             );
         } catch (error) {
+            if (error instanceof HttpException) throw error;
             if (
                 error instanceof Prisma.PrismaClientKnownRequestError &&
                 error.code === 'P2002' &&
@@ -359,29 +452,6 @@ export class NodesService {
 
             await this.nodesSystemCacheService.delete(node.uuid);
 
-            if (!node.activeConfigProfileUuid || node.activeInbounds.length === 0) {
-                const result = await this.nodesRepository.update({
-                    uuid: node.uuid,
-                    isDisabled: true,
-                    activeConfigProfileUuid: null,
-                    isConnecting: false,
-                    isConnected: false,
-                    lastStatusMessage: null,
-                    lastStatusChange: new Date(),
-                });
-
-                if (!result) {
-                    return fail(ERRORS.ENABLE_NODE_ERROR);
-                }
-
-                return ok(
-                    new NodeResponseModel(
-                        result,
-                        await this.nodesSystemCacheService.getOne(result.uuid),
-                    ),
-                );
-            }
-
             const result = await this.nodesRepository.update({
                 uuid: node.uuid,
                 isDisabled: false,
@@ -391,9 +461,11 @@ export class NodesService {
                 return fail(ERRORS.ENABLE_NODE_ERROR);
             }
 
-            await this.nodesQueuesService.startNode({
-                nodeUuid: result.uuid,
-            });
+            if (node.activeConfigProfileUuid && node.activeInbounds.length)
+                await this.nodesQueuesService.startNode({
+                    nodeUuid: result.uuid,
+                });
+            await this.nativeVpn.sync();
 
             this.eventEmitter.emit(EVENTS.NODE.ENABLED, new NodeEvent(result, EVENTS.NODE.ENABLED));
 
@@ -404,6 +476,7 @@ export class NodesService {
                 ),
             );
         } catch (error) {
+            if (error instanceof HttpException) throw error;
             this.logger.error(error);
             return fail(ERRORS.ENABLE_NODE_ERROR);
         }
@@ -443,6 +516,7 @@ export class NodesService {
                 isNeedToBeDeleted: false,
             });
 
+            await this.nativeVpn.sync();
             this.eventEmitter.emit(
                 EVENTS.NODE.DISABLED,
                 new NodeEvent(result, EVENTS.NODE.DISABLED),
@@ -455,6 +529,7 @@ export class NodesService {
                 ),
             );
         } catch (error) {
+            if (error instanceof HttpException) throw error;
             this.logger.error(error);
             return fail(ERRORS.ENABLE_NODE_ERROR);
         }
@@ -481,6 +556,7 @@ export class NodesService {
                 ),
             );
         } catch (error) {
+            if (error instanceof HttpException) throw error;
             this.logger.error(error);
             return fail(ERRORS.REORDER_NODES_ERROR);
         }
@@ -490,6 +566,7 @@ export class NodesService {
         try {
             return ok(await this.nodesRepository.findAllTags());
         } catch (error) {
+            if (error instanceof HttpException) throw error;
             this.logger.error(error);
             return fail(ERRORS.INTERNAL_SERVER_ERROR);
         }
@@ -503,7 +580,7 @@ export class NodesService {
                 new GetConfigProfileByUuidQuery(configProfile.activeConfigProfileUuid),
             );
 
-            if (!configProfileResponse.isOk) {
+            if (!configProfileResponse.isOk || configProfileResponse.response.engine !== 'xray') {
                 return fail(ERRORS.CONFIG_PROFILE_NOT_FOUND);
             }
 
@@ -529,10 +606,11 @@ export class NodesService {
             await this.nodesQueuesService.startAllNodesByProfile({
                 profileUuid: configProfile.activeConfigProfileUuid,
                 emitter: 'bulkProfileModification',
-            }); // no need to restart all nodes
+            });
 
             return ok(true);
         } catch (error) {
+            if (error instanceof HttpException) throw error;
             this.logger.error(error);
             return fail(ERRORS.INTERNAL_SERVER_ERROR);
         }
@@ -561,6 +639,7 @@ export class NodesService {
 
             return ok(true);
         } catch (error) {
+            if (error instanceof HttpException) throw error;
             this.logger.error(error);
             return fail(ERRORS.INTERNAL_SERVER_ERROR);
         }
@@ -603,6 +682,7 @@ export class NodesService {
 
             return ok(true);
         } catch (error) {
+            if (error instanceof HttpException) throw error;
             this.logger.error(error);
             return fail(ERRORS.INTERNAL_SERVER_ERROR);
         }

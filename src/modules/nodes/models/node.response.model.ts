@@ -1,5 +1,6 @@
 import { fromNanoToNumber } from '@common/utils/nano';
 import { TNodeIps } from '@libs/contracts/models';
+import type { NodeEngine } from '@libs/contracts/models/native-vpn.schema';
 
 import { ConfigProfileInboundEntity } from '@modules/config-profiles/entities';
 import { InfraProviderEntity } from '@modules/infra-billing/entities';
@@ -8,6 +9,7 @@ import { NodesEntity } from '../entities';
 import { INodeHotCache, INodeSystem, INodeVersions } from '../interfaces';
 
 export class NodeResponseModel {
+    public engines: NodeEngine[];
     public uuid: string;
     public id: number;
     public name: string;
@@ -87,8 +89,45 @@ export class NodeResponseModel {
         this.activePluginUuid = data.activePluginUuid;
 
         this.system = hotCache.system;
-        this.usersOnline = hotCache.onlineUsers;
+        this.usersOnline = hotCache.totalOnlineUsers ?? hotCache.onlineUsers;
         this.versions = hotCache.versions;
         this.xrayUptime = hotCache.xrayUptime;
+        this.engines = [...(hotCache.engines ?? [])];
+        if (data.activeConfigProfileUuid)
+            this.engines.unshift({
+                type: 'xray',
+                version: hotCache.versions?.xray ?? null,
+                enabled: !data.isDisabled,
+                running: data.xrayConnected && hotCache.xrayUptime > 0,
+                uptime: hotCache.xrayUptime,
+                usersOnline: hotCache.onlineUsers,
+                profiles: [
+                    {
+                        uuid: data.activeConfigProfileUuid,
+                        name: data.activeConfigProfileName ?? 'Xray',
+                        inbounds: data.activeInbounds.map((inbound) => ({
+                            uuid: inbound.uuid,
+                            runtimeUuid: inbound.uuid,
+                            tag: inbound.tag,
+                            port: inbound.port,
+                            transport: inbound.network,
+                            mode: 'server',
+                            assigned: true,
+                            enabled: !data.isDisabled,
+                            running: data.xrayConnected && hotCache.xrayUptime > 0,
+                            error: data.xrayLastStatusMessage,
+                            peers: 0,
+                            hosts: [],
+                        })),
+                    },
+                ],
+            });
+        if (hotCache.agentConnected !== undefined) {
+            this.isConnected = !data.isDisabled && hotCache.agentConnected;
+            if (this.isConnected) this.isConnecting = false;
+        } else if (!data.activeConfigProfileUuid && !data.isDisabled) {
+            this.isConnected = this.engines.some((engine) => engine.running);
+            this.isConnecting = !this.isConnected && data.isConnecting;
+        }
     }
 }

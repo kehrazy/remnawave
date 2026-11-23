@@ -317,7 +317,28 @@ export class ConfigProfileRepository {
                 .selectFrom('nodes')
                 .select(['uuid', 'name', 'countryCode'])
                 .orderBy('nodes.viewPosition', 'asc')
-                .whereRef('nodes.activeConfigProfileUuid', '=', 'configProfiles.uuid'),
+                .where((query) =>
+                    query.or([
+                        query(
+                            'nodes.activeConfigProfileUuid',
+                            '=',
+                            query.ref('configProfiles.uuid'),
+                        ),
+                        query.exists(
+                            query
+                                .selectFrom('configProfileInboundsToNodes as assigned')
+                                .innerJoin(
+                                    'configProfileInbounds as listener',
+                                    'listener.uuid',
+                                    'assigned.configProfileInboundUuid',
+                                )
+                                .select('assigned.nodeUuid')
+                                .whereRef('assigned.nodeUuid', '=', 'nodes.uuid')
+                                .whereRef('listener.profileUuid', '=', 'configProfiles.uuid')
+                                .where('assigned.isDisabled', '=', false),
+                        ),
+                    ]),
+                ),
         ).as('nodes');
     }
 

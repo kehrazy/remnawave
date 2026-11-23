@@ -11,5 +11,6 @@ import { HostsRepository } from './repositories/hosts.repository';
     imports: [CqrsModule],
     controllers: [HostsController, HostsBulkActionsController],
     providers: [HostsRepository, HostsConverter, HostsService, ...QUERIES],
+    exports: [HostsRepository],
 })
 export class HostsModule {}

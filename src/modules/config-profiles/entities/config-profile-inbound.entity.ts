@@ -1,6 +1,7 @@
 import { ConfigProfileInbounds } from '@prisma/client';
 
 export class ConfigProfileInboundEntity implements ConfigProfileInbounds {
+    public relayTargetHostUuid: string | null;
     public uuid: string;
     public profileUuid: string;
 
