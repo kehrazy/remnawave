@@ -1,104 +1,93 @@
-# OpenVPN
+# VPN engines
 
-OpenVPN endpoints use the same users, expiration dates, internal squads and traffic
-allowances as Xray. The panel manages OpenVPN through the authenticated Remnanode
-API. Each server endpoint has a persistent CA and each user receives a separate
-client certificate. Rotating a user's VLESS credentials also revokes their old
-OpenVPN certificate.
+Xray, OpenVPN and AmneziaWG use the panel's configuration profiles, node assignments,
+Hosts, internal squads and user accounts. OpenVPN and AmneziaWG do not have separate
+endpoint administration APIs.
 
-Use the matching [node fork](https://github.com/kehrazy/remnanode),
-[panel frontend](https://github.com/kehrazy/remnawave-frontend) and
-[subscription page](https://github.com/kehrazy/remnawave-subscription-page).
-Their `openvpn` workflows build Linux images and publish image archives as GitHub
-release assets. A Docker Hub account is unnecessary. Image tags contain the full
-source commit; verify the accompanying SHA-256 file before loading an archive.
+A configuration profile selects one `engine`: `xray`, `openvpn` or `amneziawg`.
+Its listeners are assigned in **Nodes**. A **Host** publishes a listener's address,
+port and display name. Internal squads grant users access to listeners; Host squad
+rules can further restrict a published route. A native VPN Host belongs to one
+assigned node, because that node owns the server's keys.
+
+Nodes can run any combination of these engines, including OpenVPN or AmneziaWG
+without Xray. Agent connectivity, per-engine state and per-listener errors are
+reported separately. Restarting one engine leaves other engines running. Disabling
+a node stops its assigned VPN services and suppresses dependent relay routes.
+
+## Create a route
+
+1. In **Profiles**, create an OpenVPN or AmneziaWG profile and configure a server
+   listener with an unused port and a distinct `10.x.x.0/24` tunnel pool.
+2. In **Nodes**, assign the listener to its server.
+3. In **Hosts**, select that listener and node, then set the client-facing address,
+   port and name.
+4. Add the listener to the internal squads whose users should have access.
+
+For a relay, create a listener with `mode: "relay"`, a tag, a local port and
+`relayTargetUuid` pointing to the exit server's Host. Assign it to another node,
+create its public Host and grant access through squads. The relay inherits tunnel
+and encryption settings from the exit. It forwards traffic without terminating
+the VPN. Relay chains and targets on the same node are rejected.
+
+Listener tags are unique across profiles. Existing server pools and cryptographic
+settings cannot be changed in place after assignment. Create another listener for
+a different identity. Unassigning and reassigning an existing listener preserves
+its runtime UUID, certificates and device keys. Remove relay dependencies before
+deleting a server or target Host.
+
+## Users and subscriptions
+
+Both native engines enforce the account's status, expiry, internal-squad access
+and shared traffic allowance. Usage is charged at the terminating exit, once per
+cumulative-counter delta. Relays do not charge the same payload a second time.
+Native profiles are unavailable when HWID enforcement requires an identifier that
+the native client cannot supply.
+
+OpenVPN uses persistent server CAs and individual user certificates. Credential
+rotation revokes the previous certificate. AmneziaWG creates separate peer keys
+for each account device and exit; users can manage up to five devices on their
+subscription page. Each device needs its own profile.
+
+Subscription metadata contains a typed `connectionProfiles` manifest with engine,
+format, name and download URL. The installation guide chooses compatible clients:
+Xray applications use existing subscriptions, OpenVPN clients import `.ovpn`, and
+AmneziaWG clients import `.conf`. Existing VLESS links, subscription URLs and native
+file URLs remain valid. The former native-profile metadata arrays remain available
+for compatibility.
 
 ## Deployment
 
-Back up the database, existing container configuration and node persistent data.
-Deploy the new node image with OpenVPN enabled before creating an endpoint.
-The node's Compose override supplies `/dev/net/tun`, `NET_ADMIN` and persistent
-storage. Enable IPv4 forwarding on the host and allow the chosen public port.
-Keep the existing Xray core version and configuration during the rollout.
+Use the matching [node fork](https://github.com/kehrazy/remnanode),
+[frontend](https://github.com/kehrazy/remnawave-frontend) and
+[subscription page](https://github.com/kehrazy/remnawave-subscription-page).
+The `openvpn` workflows publish image archives and SHA-256 checksums on GitHub
+Releases; a Docker Hub account is unnecessary. Frontend and subscription builds
+install a contract archive pinned to a tested backend commit. Panel builds pin a
+specific frontend release.
 
-Deploy the panel image using the existing database, Redis and environment.
-Its normal startup migration adds `openvpn_endpoints` and `openvpn_user_usage`;
-it does not replace users or Xray configurations. Deploy the matching subscription
-page image. Remove any mounted frontend HTML from an older image: its asset names
-refer to a different frontend build.
+The node setup wizard supplies an image download command and Compose configuration.
+Native services require `/dev/net/tun`, `NET_ADMIN`, host forwarding and persistent
+OpenVPN and AmneziaWG state directories. On a multi-address server, set
+`AMNEZIAWG_BIND_ADDRESS` to the ingress IPv4. The listener's optional egress address
+controls internet traffic separately. Preserve the existing Xray binary and
+configuration during a management-plane upgrade.
 
-Open **Management → OpenVPN** and add a server endpoint. Select a node, public
-address, port, transport and a distinct `10.x.x.0/24` tunnel subnet. Empty internal
-squads grant access to all otherwise eligible accounts. A relay endpoint forwards
-connections through its node to a server endpoint on another node; it uses the
-exit server's certificates, transport and access policy. Relays cannot narrow
-access independently of the exit. Relay chains are rejected.
+Back up PostgreSQL, container configuration and every node's persistent keys before
+migration. Upgrade agents before the panel. The normal panel entrypoint runs Prisma
+migrations; deployments overriding that entrypoint must run `prisma migrate deploy`
+explicitly before starting the new backend.
 
-Each eligible user's existing subscription page displays downloadable `.ovpn`
-profiles. Import them into an OpenVPN client. Xray subscription formats and
-existing VLESS links remain usable. OpenVPN downloads are separate files because
-Xray and sing-box subscriptions cannot represent OpenVPN connections.
+The native-profile migration retains old endpoint tables as rollback data. Runtime
+UUIDs and public Host UUIDs retain the original endpoint UUIDs. No active management
+code reads the legacy tables. `prisma/rollback-native-vpn.sql` supports an immediate
+deployment rollback: stop the new panel, back up its database, apply the SQL and
+restore the previous panel. Keep new agents running while the old panel restores
+its endpoint definitions. Legacy tables are not synchronized with later profile
+edits, so this SQL is not a general undo for subsequent administration changes.
 
-The supported control-channel settings are `tls-crypt-v2`, `tls-crypt`, `tls-auth`
-and `none`. `none` retains certificate-based TLS and authenticated data encryption;
-it omits the additional pre-shared control-channel wrapper. Compression is disabled
-in every mode. These are configuration choices, not promises of DPI resistance.
-Test both the handshake and sustained data transfer on the affected ISP.
-
-## UDP masking
-
-The server endpoint's `udpMask` setting accepts `none`, `random`, `strong` and
-`error-free`. It follows the server-only UDP packet strategy in
-[AntiZapret-VPN's patch](https://github.com/GubernievS/AntiZapret-VPN/blob/88b440254872e49dc6a3aa300d681e15dadd11c1/setup/root/antizapret/patch-openvpn.sh).
-The bundled OpenVPN 2.6.23 packet writer inserts 150–200 junk datagrams
-around handshake-reset replies. The source archive is pinned by SHA-256; the patch
-and build script are included in the node fork. Ordinary client profiles remain usable. `strong`
-sends junk before the reset; `error-free` sends the valid reset first; `random`
-chooses between them. Each endpoint limits masking to 500 junk packets per second.
-Data packets are forwarded unchanged. TCP endpoints and relay endpoints cannot
-apply this option; a relay forwards the exit server's already masked traffic.
-
-Masking does not turn OpenVPN into HTTPS or bypass destination-IP blocking. The
-upstream reports concern particular networks and dates. Verify sustained transfers
-on the target network before publishing an endpoint.
-
-## Access and accounting
-
-The panel reconciles accounts and cumulative counters every 15 seconds and on user
-or node events. The node independently checks expiration every five seconds and
-disconnects sessions that no longer have access. Persist the entire OpenVPN state
-directory, including its CA, client keys and counters. Repeated downloads and
-container restarts retain the same credentials.
-
-OpenVPN traffic contributes to the existing user allowance, lifetime totals and
-node usage history. Database transactions deduplicate cumulative counters by node
-and counter epoch. Accounting occurs at the OpenVPN server, including when a relay
-forwards the connection. A relay does not independently account encrypted packets.
-
-OpenVPN cannot enforce Happ's device binding. Accounts subject to the existing HWID
-policy therefore receive no OpenVPN profiles. Expired, disabled, over-quota and
-out-of-squad accounts cannot download or authenticate with a profile.
-
-## API
-
-Authenticated administration endpoints:
-
-| Method | Path                           | Purpose                                      |
-| ------ | ------------------------------ | -------------------------------------------- |
-| GET    | `/api/openvpn/endpoints`       | List endpoints and last observed node health |
-| POST   | `/api/openvpn/endpoints`       | Create an endpoint                           |
-| PATCH  | `/api/openvpn/endpoints/:uuid` | Edit or disable an endpoint                  |
-| DELETE | `/api/openvpn/endpoints/:uuid` | Stop and remove an endpoint                  |
-| POST   | `/api/openvpn/endpoints/sync`  | Reconcile accounts and collect usage         |
-
-API tokens require `openvpn:*` or `*`. User downloads use the existing secret
-subscription identifier at `/api/openvpn/subscriptions/:shortUuid/:uuid.ovpn`.
-The subscription page proxies downloads through its existing hostname.
-
-## Rollback
-
-Restore the previous image references and restart the affected services. Keep the
-additive database tables and OpenVPN persistent data: the previous panel ignores
-them, and retaining them allows a later retry without reissuing credentials.
-Removing an endpoint stops it but retains its PKI files. Disable endpoints before
-removing OpenVPN support; remove only their owned `RWOVP...` firewall chains.
+OpenVPN supports `none`, `tls-auth`, `tls-crypt` and `tls-crypt-v2` control-channel
+wrappers and optional UDP handshake masking. `none` retains certificate-based TLS
+and authenticated data encryption. AmneziaWG supports generations 2.0 and 3.1 with
+validated parameter overrides. These settings do not guarantee continued access
+through any particular censor or network.
