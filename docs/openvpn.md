@@ -44,6 +44,22 @@ it omits the additional pre-shared control-channel wrapper. Compression is disab
 in every mode. These are configuration choices, not promises of DPI resistance.
 Test both the handshake and sustained data transfer on the affected ISP.
 
+## UDP masking
+
+The server endpoint's `udpMask` setting accepts `none`, `random`, `strong` and
+`error-free`. It follows the server-only UDP packet strategy in
+[AntiZapret-VPN's patch](https://github.com/GubernievS/AntiZapret-VPN/blob/88b440254872e49dc6a3aa300d681e15dadd11c1/setup/root/antizapret/patch-openvpn.sh).
+Remnanode forwards a loopback OpenVPN listener and inserts 150–200 junk datagrams
+around handshake-reset replies. Ordinary client profiles remain usable. `strong`
+sends junk before the reset; `error-free` sends the valid reset first; `random`
+chooses between them. Each endpoint limits masking to 500 junk packets per second.
+Data packets are forwarded unchanged. TCP endpoints and relay endpoints cannot
+apply this option; a relay forwards the exit server's already masked traffic.
+
+Masking does not turn OpenVPN into HTTPS or bypass destination-IP blocking. The
+upstream reports concern particular networks and dates. Verify sustained transfers
+on the target network before publishing an endpoint.
+
 ## Access and accounting
 
 The panel reconciles accounts and cumulative counters every 15 seconds and on user

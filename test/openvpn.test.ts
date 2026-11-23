@@ -60,11 +60,12 @@ test(
         const transport = {
             setJwt: async () => {},
             request: async ({ path, data }: { path: string; data?: unknown }) => {
-                if (path === '/openvpn/users') synced = (data as { users: typeof synced }).users;
+                if (path === '/node/openvpn/users')
+                    synced = (data as { users: typeof synced }).users;
                 return {
                     isOk: true,
                     response:
-                        path === '/openvpn/usage'
+                        path === '/node/openvpn/usage'
                             ? usage
                             : { endpoints: [{ uuid: endpoint.uuid, running: true, error: null }] },
                 };

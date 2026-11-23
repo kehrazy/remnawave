@@ -73,7 +73,7 @@ export class OpenVpnService implements OnApplicationBootstrap, OnModuleDestroy {
         const result = await this.axios.request<{ response: T }>({
             label: 'OPENVPN',
             opts: node,
-            path: `/openvpn${path}`,
+            path: `/node/openvpn${path}`,
             method: data === undefined ? 'get' : 'post',
             data,
             timeout: 30_000,
