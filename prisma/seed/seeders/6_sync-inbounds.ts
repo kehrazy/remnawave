@@ -7,7 +7,7 @@ import { diffInbounds } from '@common/utils/inbounds';
 export async function syncInbounds(prisma: PrismaClient) {
     consola.start('Syncing inbounds...');
 
-    const configProfiles = await prisma.configProfiles.findMany();
+    const configProfiles = await prisma.configProfiles.findMany({ where: { engine: 'xray' } });
 
     for (const configProfile of configProfiles) {
         consola.start(`Syncing ${configProfile.name}...`);

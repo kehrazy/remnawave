@@ -13,6 +13,8 @@ import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { test } from 'node:test';
 
+import { syncInbounds } from '../prisma/seed/seeders/6_sync-inbounds';
+
 import { DiscoveryService, MetadataScanner, Reflector } from '@nestjs/core';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 
@@ -364,6 +366,21 @@ for (const engine of ['openvpn', 'amneziawg'] as const)
                     where: { configProfileInboundUuid: collision.uuid },
                 }),
                 0,
+            );
+            const beforeSeed = await prisma.configProfileInbounds.findMany({
+                where: { uuid: { in: inbounds } },
+                include: { nodes: true, hosts: true, internalSquadInbounds: true },
+                orderBy: { uuid: 'asc' },
+            });
+            await syncInbounds(prisma);
+            assert.deepEqual(
+                await prisma.configProfileInbounds.findMany({
+                    where: { uuid: { in: inbounds } },
+                    include: { nodes: true, hosts: true, internalSquadInbounds: true },
+                    orderBy: { uuid: 'asc' },
+                }),
+                beforeSeed,
+                'database seeding preserves native listener identities and their assignments',
             );
             await service.sync();
             assert.equal(
