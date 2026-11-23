@@ -54,7 +54,7 @@ test(
         });
         await assert.rejects(
             prisma.nodes.delete({ where: { uuid: node.uuid } }),
-            (error: unknown) => (error as { code?: string }).code === 'P2003',
+            /openvpn_endpoints_node_uuid_fkey/,
         );
         let usage = {
             epoch: randomUUID(),
