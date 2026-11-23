@@ -369,14 +369,14 @@ for (const engine of ['openvpn', 'amneziawg'] as const)
             );
             const beforeSeed = await prisma.configProfileInbounds.findMany({
                 where: { uuid: { in: inbounds } },
-                include: { nodes: true, hosts: true, internalSquadInbounds: true },
+                include: { configProfileInboundsToNodes: true, hosts: true, internalSquadInbounds: true },
                 orderBy: { uuid: 'asc' },
             });
             await syncInbounds(prisma);
             assert.deepEqual(
                 await prisma.configProfileInbounds.findMany({
                     where: { uuid: { in: inbounds } },
-                    include: { nodes: true, hosts: true, internalSquadInbounds: true },
+                    include: { configProfileInboundsToNodes: true, hosts: true, internalSquadInbounds: true },
                     orderBy: { uuid: 'asc' },
                 }),
                 beforeSeed,
