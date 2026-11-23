@@ -5,6 +5,7 @@ import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { test } from 'node:test';
 
+import { ManagedVpnService } from '../src/common/vpn/managed-vpn.service';
 import { PrismaService } from '../src/common/database/prisma.service';
 import { UpdateOpenVpnEndpointSchema } from '../src/modules/openvpn/openvpn.schemas';
 import { OpenVpnService } from '../src/modules/openvpn/openvpn.service';
@@ -97,7 +98,7 @@ test(
                 };
             },
         } as unknown as AxiosService;
-        const service = new OpenVpnService(prisma, transport);
+        const service = new OpenVpnService(prisma, transport, new ManagedVpnService(prisma));
         assert.equal((await service.profiles(user.shortUuid)).length, 1);
         await service.sync();
         assert.equal(synced[0].credentialId, user.vlessUuid);
@@ -168,7 +169,7 @@ test(
         };
         const updating = service.update(endpoint.uuid, { name: 'Updated' });
         await started;
-        const otherInstance = new OpenVpnService(prisma, transport);
+        const otherInstance = new OpenVpnService(prisma, transport, new ManagedVpnService(prisma));
         const deleting = otherInstance.remove(endpoint.uuid);
         await new Promise((resolve) => setTimeout(resolve, 100));
         release();
@@ -180,5 +181,18 @@ test(
         await service.sync();
         assert.equal(running.size, 0);
         assert.deepEqual(synced, []);
+        const managed = new ManagedVpnService(prisma);
+        const beforeAwg = (await prisma.userTraffic.findUniqueOrThrow({ where: { id: user.id } })).usedTrafficBytes;
+        const awgUsage = {
+            epoch: randomUUID(),
+            users: [{ id: user.id.toString(), uplink: 100, downlink: 200, online: false }],
+        };
+        await managed.accountUsage('amneziawg', node, awgUsage);
+        await managed.accountUsage('amneziawg', node, awgUsage);
+        await managed.accountUsage('openvpn', node, usage);
+        assert.equal(
+            (await prisma.userTraffic.findUniqueOrThrow({ where: { id: user.id } })).usedTrafficBytes,
+            beforeAwg + 450n,
+        );
     },
 );

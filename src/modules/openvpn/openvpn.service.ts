@@ -15,6 +15,7 @@ import { OnEvent } from '@nestjs/event-emitter';
 
 import { AxiosService, type INodeConnectionOpts } from '@common/axios';
 import { PrismaService } from '@common/database/prisma.service';
+import { ManagedVpnService } from '@common/vpn/managed-vpn.service';
 
 import {
     CreateOpenVpnEndpointSchema,
@@ -35,12 +36,12 @@ export class OpenVpnService implements OnApplicationBootstrap, OnModuleDestroy {
     private timer: ReturnType<typeof setInterval> | undefined;
     private reconciling: Promise<void> | null = null;
     private resyncRequested = false;
-    private configuring: Promise<unknown> = Promise.resolve();
     private nodeReady: Promise<void> | null = null;
 
     constructor(
         private readonly prisma: PrismaService,
         private readonly axios: AxiosService,
+        private readonly managedVpn: ManagedVpnService,
     ) {}
 
     onApplicationBootstrap(): void {
@@ -61,24 +62,6 @@ export class OpenVpnService implements OnApplicationBootstrap, OnModuleDestroy {
         void this.sync().catch((error: unknown) =>
             this.logger.error(`OpenVPN reconciliation failed: ${String(error)}`),
         );
-    }
-
-    private withConfigurationLock<T>(operation: () => Promise<T>): Promise<T> {
-        const result = this.configuring.then(() =>
-            this.prisma.$transaction(
-                async (tx) => {
-                    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext('remnawave:openvpn:configuration'))`;
-                    // The transaction owns the lock while node RPCs and independently committed writes complete.
-                    return operation();
-                },
-                { timeout: 120_000, maxWait: 10_000 },
-            ),
-        );
-        this.configuring = result.then(
-            () => undefined,
-            () => undefined,
-        );
-        return result;
     }
 
     private async nodeRequest<T>(
@@ -106,33 +89,10 @@ export class OpenVpnService implements OnApplicationBootstrap, OnModuleDestroy {
         return result.response;
     }
 
-    private accountAllowed(user: Account, hwidEnabled: boolean): boolean {
-        const hwidOverride = user.externalSquad?.hwidSettings as
-            | { enabled?: boolean }
-            | null
-            | undefined;
-        return (
-            user.status === 'ACTIVE' &&
-            user.expireAt.getTime() > Date.now() &&
-            !(hwidOverride?.enabled ?? hwidEnabled) &&
-            (user.trafficLimitBytes === 0n ||
-                (user.traffic?.usedTrafficBytes ?? 0n) < user.trafficLimitBytes)
-        );
-    }
-
-    private nodeAvailable(node: Nodes): boolean {
-        return (
-            !node.isDisabled &&
-            (!node.isTrafficTrackingActive ||
-                !node.trafficLimitBytes ||
-                (node.trafficUsedBytes ?? 0n) < node.trafficLimitBytes)
-        );
-    }
-
     private endpointAllowed(endpoint: Endpoint, user: Account): boolean {
         return (
             !endpoint.isDisabled &&
-            this.nodeAvailable(endpoint.node) &&
+            this.managedVpn.nodeAvailable(endpoint.node) &&
             (endpoint.internalSquadUuids.length === 0 ||
                 user.activeInternalSquads.some((member) =>
                     endpoint.internalSquadUuids.includes(member.internalSquadUuid),
@@ -168,8 +128,8 @@ export class OpenVpnService implements OnApplicationBootstrap, OnModuleDestroy {
             targetPort: target?.port ?? null,
             isDisabled:
                 endpoint.isDisabled ||
-                !this.nodeAvailable(endpoint.node) ||
-                Boolean(target && (target.isDisabled || !this.nodeAvailable(target.node))),
+                !this.managedVpn.nodeAvailable(endpoint.node) ||
+                Boolean(target && (target.isDisabled || !this.managedVpn.nodeAvailable(target.node))),
         };
     }
 
@@ -188,7 +148,7 @@ export class OpenVpnService implements OnApplicationBootstrap, OnModuleDestroy {
     }
 
     async create(input: OpenVpnEndpointInput) {
-        return this.withConfigurationLock(async () => {
+        return this.managedVpn.withConfigurationLock(async () => {
             const data = CreateOpenVpnEndpointSchema.parse(input);
             if (data.relayTargetUuid && data.internalSquadUuids.length)
                 throw new BadRequestException('Relays inherit the exit server internal squads');
@@ -239,7 +199,7 @@ export class OpenVpnService implements OnApplicationBootstrap, OnModuleDestroy {
     }
 
     async update(uuid: string, patch: Partial<OpenVpnEndpointInput>) {
-        return this.withConfigurationLock(async () => {
+        return this.managedVpn.withConfigurationLock(async () => {
             const current = await this.prisma.openVpnEndpoint.findUnique({
                 where: { uuid },
                 include: { node: true },
@@ -289,7 +249,7 @@ export class OpenVpnService implements OnApplicationBootstrap, OnModuleDestroy {
     }
 
     async remove(uuid: string): Promise<void> {
-        return this.withConfigurationLock(async () => {
+        return this.managedVpn.withConfigurationLock(async () => {
             const endpoint = await this.prisma.openVpnEndpoint.findUnique({
                 where: { uuid },
                 include: { node: true },
@@ -313,7 +273,7 @@ export class OpenVpnService implements OnApplicationBootstrap, OnModuleDestroy {
             select: { hwidSettings: true },
         });
         const hwid = Boolean((settings?.hwidSettings as { enabled?: boolean } | null)?.enabled);
-        if (!user || !this.accountAllowed(user, hwid)) return [];
+        if (!user || !this.managedVpn.accountAllowed(user, hwid)) return [];
         const endpoints = await this.prisma.openVpnEndpoint.findMany({
             include: { node: true },
             orderBy: { createdAt: 'asc' },
@@ -372,7 +332,7 @@ export class OpenVpnService implements OnApplicationBootstrap, OnModuleDestroy {
     private async reconcile(): Promise<void> {
         for (let pass = 0; pass < 2; pass++) {
             this.resyncRequested = false;
-            await this.withConfigurationLock(async () => {
+            await this.managedVpn.withConfigurationLock(async () => {
                 const generation = Date.now();
                 const endpoints = await this.prisma.openVpnEndpoint.findMany({
                     include: { node: true },
@@ -403,7 +363,7 @@ export class OpenVpnService implements OnApplicationBootstrap, OnModuleDestroy {
                                 return;
                             }
                             const users = accounts
-                                .filter((user) => this.accountAllowed(user, hwid))
+                                .filter((user) => this.managedVpn.accountAllowed(user, hwid))
                                 .map((user) => ({
                                     id: user.id.toString(),
                                     credentialId: user.vlessUuid,
@@ -436,8 +396,8 @@ export class OpenVpnService implements OnApplicationBootstrap, OnModuleDestroy {
                                         error: entry.error,
                                     });
                             }
-                            await this.accountUsage(
-                                node,
+                            await this.managedVpn.accountUsage(
+                                'openvpn', node,
                                 OpenVpnUsageSchema.parse(await this.nodeRequest(node, '/usage')),
                             );
                         } catch (error) {
@@ -456,102 +416,5 @@ export class OpenVpnService implements OnApplicationBootstrap, OnModuleDestroy {
         setImmediate(() => this.onChanged());
     }
 
-    private async accountUsage(
-        node: Nodes,
-        usage: ReturnType<typeof OpenVpnUsageSchema.parse>,
-    ): Promise<void> {
-        await this.prisma.$transaction(
-            async (tx) => {
-                await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`openvpn:${node.uuid}`}))`;
-                const now = new Date();
-                const day = new Date(now.toISOString().slice(0, 10));
-                const hour = new Date(now);
-                hour.setUTCMinutes(0, 0, 0);
-                for (const entry of usage.users) {
-                    const userId = BigInt(entry.id);
-                    const user = await tx.users.findUnique({
-                        where: { id: userId },
-                        include: { traffic: true },
-                    });
-                    if (!user) continue;
-                    const key = { nodeUuid: node.uuid, userId };
-                    const previous = await tx.openVpnUserUsage.findUnique({
-                        where: { nodeUuid_userId: key },
-                    });
-                    const uplink = BigInt(entry.uplink);
-                    const downlink = BigInt(entry.downlink);
-                    const sameEpoch = previous?.epoch === usage.epoch;
-                    if (
-                        sameEpoch &&
-                        previous &&
-                        (uplink < previous.uplink || downlink < previous.downlink)
-                    ) {
-                        throw new Error(
-                            'OpenVPN cumulative counters decreased without an epoch change',
-                        );
-                    }
-                    const up = uplink - (sameEpoch ? previous!.uplink : 0n);
-                    const down = downlink - (sameEpoch ? previous!.downlink : 0n);
-                    const total = up + down;
-                    await tx.openVpnUserUsage.upsert({
-                        where: { nodeUuid_userId: key },
-                        create: { ...key, epoch: usage.epoch, uplink, downlink },
-                        update: { epoch: usage.epoch, uplink, downlink },
-                    });
-                    if (total === 0n && !entry.online) continue;
-                    const charged = (total * node.consumptionMultiplier) / 1_000_000_000n;
-                    await tx.userTraffic.upsert({
-                        where: { id: userId },
-                        create: {
-                            id: userId,
-                            usedTrafficBytes: charged,
-                            lifetimeUsedTrafficBytes: charged,
-                            onlineAt: now,
-                            firstConnectedAt: now,
-                            lastConnectedNodeUuid: node.uuid,
-                        },
-                        update: {
-                            usedTrafficBytes: { increment: charged },
-                            lifetimeUsedTrafficBytes: { increment: charged },
-                            onlineAt: now,
-                            firstConnectedAt: user.traffic?.firstConnectedAt ?? now,
-                            lastConnectedNodeUuid: node.uuid,
-                        },
-                    });
-                    await tx.nodesUserUsageHistory.upsert({
-                        where: {
-                            nodeId_createdAt_userId: { nodeId: node.id, createdAt: day, userId },
-                        },
-                        create: { nodeId: node.id, createdAt: day, userId, totalBytes: total },
-                        update: { totalBytes: { increment: total } },
-                    });
-                    await tx.nodesUsageHistory.upsert({
-                        where: { nodeUuid_createdAt: { nodeUuid: node.uuid, createdAt: hour } },
-                        create: {
-                            nodeUuid: node.uuid,
-                            createdAt: hour,
-                            uploadBytes: up,
-                            downloadBytes: down,
-                            totalBytes: total,
-                        },
-                        update: {
-                            uploadBytes: { increment: up },
-                            downloadBytes: { increment: down },
-                            totalBytes: { increment: total },
-                        },
-                    });
-                    await tx.nodes.update({
-                        where: { uuid: node.uuid },
-                        data: {
-                            trafficUsedBytes: {
-                                increment:
-                                    (total * node.nodeConsumptionMultiplier) / 1_000_000_000n,
-                            },
-                        },
-                    });
-                }
-            },
-            { timeout: 30_000 },
-        );
-    }
+
 }
