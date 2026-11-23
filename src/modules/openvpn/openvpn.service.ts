@@ -120,13 +120,19 @@ export class OpenVpnService implements OnApplicationBootstrap, OnModuleDestroy {
         );
     }
 
+    private nodeAvailable(node: Nodes): boolean {
+        return (
+            !node.isDisabled &&
+            (!node.isTrafficTrackingActive ||
+                !node.trafficLimitBytes ||
+                (node.trafficUsedBytes ?? 0n) < node.trafficLimitBytes)
+        );
+    }
+
     private endpointAllowed(endpoint: Endpoint, user: Account): boolean {
         return (
             !endpoint.isDisabled &&
-            !endpoint.node.isDisabled &&
-            (!endpoint.node.isTrafficTrackingActive ||
-                !endpoint.node.trafficLimitBytes ||
-                (endpoint.node.trafficUsedBytes ?? 0n) < endpoint.node.trafficLimitBytes) &&
+            this.nodeAvailable(endpoint.node) &&
             (endpoint.internalSquadUuids.length === 0 ||
                 user.activeInternalSquads.some((member) =>
                     endpoint.internalSquadUuids.includes(member.internalSquadUuid),
@@ -157,8 +163,8 @@ export class OpenVpnService implements OnApplicationBootstrap, OnModuleDestroy {
             targetPort: target?.port ?? null,
             isDisabled:
                 endpoint.isDisabled ||
-                endpoint.node.isDisabled ||
-                Boolean(target?.isDisabled || target?.node.isDisabled),
+                !this.nodeAvailable(endpoint.node) ||
+                Boolean(target && (target.isDisabled || !this.nodeAvailable(target.node))),
         };
     }
 
@@ -179,6 +185,8 @@ export class OpenVpnService implements OnApplicationBootstrap, OnModuleDestroy {
     async create(input: OpenVpnEndpointInput) {
         return this.withConfigurationLock(async () => {
             const data = CreateOpenVpnEndpointSchema.parse(input);
+            if (data.relayTargetUuid && data.internalSquadUuids.length)
+                throw new BadRequestException('Relays inherit the exit server internal squads');
             if (data.udpMask !== 'none' && (data.protocol !== 'udp' || data.relayTargetUuid))
                 throw new BadRequestException('UDP masking requires a UDP server endpoint');
             const node = await this.prisma.nodes.findUnique({ where: { uuid: data.nodeUuid } });
@@ -233,6 +241,8 @@ export class OpenVpnService implements OnApplicationBootstrap, OnModuleDestroy {
             });
             if (!current) throw new NotFoundException('OpenVPN endpoint not found');
             const data = CreateOpenVpnEndpointSchema.parse({ ...current, ...patch });
+            if (data.relayTargetUuid && data.internalSquadUuids.length)
+                throw new BadRequestException('Relays inherit the exit server internal squads');
             if (data.udpMask !== 'none' && (data.protocol !== 'udp' || data.relayTargetUuid))
                 throw new BadRequestException('UDP masking requires a UDP server endpoint');
             if (

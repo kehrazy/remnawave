@@ -52,6 +52,10 @@ test(
                 dnsServers: ['1.1.1.1'],
             },
         });
+        await assert.rejects(
+            prisma.nodes.delete({ where: { uuid: node.uuid } }),
+            (error: unknown) => (error as { code?: string }).code === 'P2003',
+        );
         let usage = {
             epoch: randomUUID(),
             users: [{ id: user.id.toString(), uplink: 100, downlink: 300, online: true }],

@@ -31,7 +31,8 @@ Open **Management → OpenVPN** and add a server endpoint. Select a node, public
 address, port, transport and a distinct `10.x.x.0/24` tunnel subnet. Empty internal
 squads grant access to all otherwise eligible accounts. A relay endpoint forwards
 connections through its node to a server endpoint on another node; it uses the
-exit server's certificates and transport. Relay chains are rejected.
+exit server's certificates, transport and access policy. Relays cannot narrow
+access independently of the exit. Relay chains are rejected.
 
 Each eligible user's existing subscription page displays downloadable `.ovpn`
 profiles. Import them into an OpenVPN client. Xray subscription formats and
