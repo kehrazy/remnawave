@@ -144,8 +144,13 @@ export class OpenVpnService implements OnApplicationBootstrap, OnModuleDestroy {
         const target = endpoint.relayTargetUuid
             ? endpoints.find((item) => item.uuid === endpoint.relayTargetUuid)
             : null;
-        if (endpoint.relayTargetUuid && (!target || target.relayTargetUuid)) {
-            throw new BadRequestException('A relay must target an OpenVPN server endpoint');
+        if (
+            endpoint.relayTargetUuid &&
+            (!target || target.relayTargetUuid || target.protocol !== endpoint.protocol)
+        ) {
+            throw new BadRequestException(
+                'A relay must target an OpenVPN server using the same transport',
+            );
         }
         return {
             uuid: endpoint.uuid,
