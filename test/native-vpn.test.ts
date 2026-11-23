@@ -13,6 +13,7 @@ import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { test } from 'node:test';
 
+import { DiscoveryService, MetadataScanner, Reflector } from '@nestjs/core';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 
 import {
@@ -24,10 +25,24 @@ import { PrismaService } from '../src/common/database/prisma.service';
 import { TxKyselyService } from '../src/common/database/tx-kysely.service';
 import { ManagedVpnService } from '../src/common/vpn/managed-vpn.service';
 import { NativeVpnService } from '../src/common/vpn/native-vpn.service';
+import { ScopeCatalogService } from '../src/modules/api-tokens/scope-catalog.service';
 import { HostsConverter } from '../src/modules/hosts/hosts.converter';
 import { HostsRepository } from '../src/modules/hosts/repositories/hosts.repository';
 import { NodesEntity } from '../src/modules/nodes/entities/nodes.entity';
 import { NodeResponseModel } from '../src/modules/nodes/models/node.response.model';
+import { NodesController } from '../src/modules/nodes/nodes.controller';
+
+test('node lifecycle scopes remain unique when engine actions are registered', () => {
+    const discovery = {
+        getControllers: () => [
+            { instance: Object.create(NodesController.prototype), metatype: NodesController },
+        ],
+    } as unknown as DiscoveryService;
+    const catalog = new ScopeCatalogService(discovery, new MetadataScanner(), new Reflector());
+    catalog.onApplicationBootstrap();
+    assert.ok(catalog.getCatalog().some((entry) => entry.key === 'nodes:restart-engine'));
+    assert.ok(catalog.getCatalog().some((entry) => entry.key === 'nodes:restart'));
+});
 
 test('native relay profiles contain only forwarding settings and reject recursive server fields', () => {
     const relay = {

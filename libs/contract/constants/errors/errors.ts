@@ -208,7 +208,8 @@ export const ERRORS = {
     },
     NODE_HAS_VPN_LISTENERS: {
         code: 'A259',
-        message: 'Unassign this node’s VPN listeners before deleting it',
+        message:
+            'Unassign VPN listeners and update dependent relay targets before deleting this node',
         httpCode: 409,
     },
     DELETE_NODE_ERROR: {

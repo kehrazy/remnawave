@@ -298,6 +298,13 @@ export class NodesService {
                 return fail(ERRORS.NODE_HAS_VPN_LISTENERS);
             }
 
+            if (
+                await this.prisma.configProfileInbounds.count({
+                    where: { relayTargetHost: { nodes: { some: { nodeUuid: node.uuid } } } },
+                })
+            )
+                return fail(ERRORS.NODE_HAS_VPN_LISTENERS);
+
             await this.nodesQueuesService.stopNode({
                 nodeUuid: node.uuid,
                 isNeedToBeDeleted: true,

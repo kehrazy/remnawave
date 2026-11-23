@@ -12,7 +12,7 @@ export namespace RestartNodeEngineCommand {
         NODES_ROUTES.ACTIONS.RESTART_ENGINE(':uuid', ':engine'),
         'post',
         'Restart a VPN engine',
-        { scope: 'restart', kind: 'write' },
+        { scope: 'restart-engine', kind: 'write' },
     );
     export const RequestParamSchema = z.object({ uuid: z.uuid(), engine: VpnEngineSchema });
     export const ResponseSchema = NodeResponseSchema;
