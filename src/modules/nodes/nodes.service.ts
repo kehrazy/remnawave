@@ -5,6 +5,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { CommandBus, QueryBus } from '@nestjs/cqrs';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 
+import { PrismaService } from '@common/database/prisma.service';
 import { fail, ok, TResult } from '@common/types';
 import { atLeastOneDefined, mapDefined, wrapBigInt } from '@common/utils';
 import { toNano } from '@common/utils/nano';
@@ -39,6 +40,7 @@ export class NodesService {
         private readonly queryBus: QueryBus,
         private readonly commandBus: CommandBus,
         private readonly nodesSystemCacheService: NodesSystemCacheService,
+        private readonly prisma: PrismaService,
     ) {}
 
     public async createNode(body: CreateNodeBodyDto): Promise<TResult<NodeResponseModel>> {
@@ -228,6 +230,10 @@ export class NodesService {
             const node = await this.nodesRepository.findByUUID(uuid);
             if (!node) {
                 return fail(ERRORS.NODE_NOT_FOUND);
+            }
+
+            if (await this.prisma.openVpnEndpoint.count({ where: { nodeUuid: node.uuid } })) {
+                return fail(ERRORS.NODE_HAS_OPENVPN_ENDPOINTS);
             }
 
             await this.nodesQueuesService.stopNode({

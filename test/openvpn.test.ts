@@ -57,17 +57,31 @@ test(
             users: [{ id: user.id.toString(), uplink: 100, downlink: 300, online: true }],
         };
         let synced: { id: string; credentialId: string; endpointUuids: string[] }[] = [];
+        const running = new Set([endpoint.uuid]);
+        let configureGate: (() => Promise<void>) | undefined;
         const transport = {
             setJwt: async () => {},
             request: async ({ path, data }: { path: string; data?: unknown }) => {
                 if (path === '/node/openvpn/users')
                     synced = (data as { users: typeof synced }).users;
+                if (path === '/node/openvpn/endpoints') {
+                    await configureGate?.();
+                    running.add((data as { uuid: string }).uuid);
+                }
+                if (path.endsWith('/remove')) running.delete(path.split('/')[4]);
                 return {
                     isOk: true,
                     response:
                         path === '/node/openvpn/usage'
                             ? usage
-                            : { endpoints: [{ uuid: endpoint.uuid, running: true, error: null }] },
+                            : {
+                                  enabled: true,
+                                  endpoints: [...running].map((uuid) => ({
+                                      uuid,
+                                      running: true,
+                                      error: null,
+                                  })),
+                              },
                 };
             },
         } as unknown as AxiosService;
@@ -128,5 +142,31 @@ test(
         });
         t.after(() => prisma.subscriptionSettings.delete({ where: { uuid: settings.uuid } }));
         assert.deepEqual(await service.profiles(user.shortUuid), []);
+        let release!: () => void;
+        let entered!: () => void;
+        const blocked = new Promise<void>((resolve) => {
+            release = resolve;
+        });
+        const started = new Promise<void>((resolve) => {
+            entered = resolve;
+        });
+        configureGate = async () => {
+            entered();
+            await blocked;
+        };
+        const updating = service.update(endpoint.uuid, { name: 'Updated' });
+        await started;
+        const otherInstance = new OpenVpnService(prisma, transport);
+        const deleting = otherInstance.remove(endpoint.uuid);
+        await new Promise((resolve) => setTimeout(resolve, 100));
+        release();
+        await Promise.all([updating, deleting]);
+        configureGate = undefined;
+        await service.sync();
+        assert.equal(running.size, 0);
+        running.add(randomUUID());
+        await service.sync();
+        assert.equal(running.size, 0);
+        assert.deepEqual(synced, []);
     },
 );

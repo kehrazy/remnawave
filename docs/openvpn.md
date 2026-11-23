@@ -49,8 +49,9 @@ Test both the handshake and sustained data transfer on the affected ISP.
 The server endpoint's `udpMask` setting accepts `none`, `random`, `strong` and
 `error-free`. It follows the server-only UDP packet strategy in
 [AntiZapret-VPN's patch](https://github.com/GubernievS/AntiZapret-VPN/blob/88b440254872e49dc6a3aa300d681e15dadd11c1/setup/root/antizapret/patch-openvpn.sh).
-Remnanode forwards a loopback OpenVPN listener and inserts 150–200 junk datagrams
-around handshake-reset replies. Ordinary client profiles remain usable. `strong`
+The bundled OpenVPN 2.6.23 packet writer inserts 150–200 junk datagrams
+around handshake-reset replies. The source archive is pinned by SHA-256; the patch
+and build script are included in the node fork. Ordinary client profiles remain usable. `strong`
 sends junk before the reset; `error-free` sends the valid reset first; `random`
 chooses between them. Each endpoint limits masking to 500 junk packets per second.
 Data packets are forwarded unchanged. TCP endpoints and relay endpoints cannot
