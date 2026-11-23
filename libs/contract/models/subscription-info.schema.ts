@@ -14,8 +14,7 @@ export const SubscriptionInfoSchema = z.object({
         trafficLimitBytes: z.string(),
         lifetimeTrafficUsedBytes: z.string(),
         username: z.string(),
-        expiresAt: z.iso.datetime()
-            .transform((str) => new Date(str)),
+        expiresAt: z.iso.datetime().transform((str) => new Date(str)),
         isActive: z.boolean(),
         userStatus: z.enum(USERS_STATUS),
         trafficLimitStrategy: z.enum(RESET_PERIODS),
@@ -23,4 +22,15 @@ export const SubscriptionInfoSchema = z.object({
     links: z.array(z.string()),
     ssConfLinks: z.record(z.string(), z.string()),
     subscriptionUrl: z.string(),
+    openVpnProfiles: z
+        .array(
+            z.object({
+                uuid: z.uuid(),
+                name: z.string(),
+                protocol: z.enum(['udp', 'tcp']),
+                controlChannel: z.enum(['none', 'tls-auth', 'tls-crypt', 'tls-crypt-v2']),
+                url: z.string(),
+            }),
+        )
+        .optional(),
 });

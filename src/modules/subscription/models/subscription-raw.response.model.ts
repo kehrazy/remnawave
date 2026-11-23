@@ -20,6 +20,13 @@ export class SubscriptionRawResponse {
     public links: string[];
     public ssConfLinks: Record<string, string>;
     public subscriptionUrl: string;
+    public openVpnProfiles?: {
+        uuid: string;
+        name: string;
+        protocol: 'udp' | 'tcp';
+        controlChannel: 'none' | 'tls-auth' | 'tls-crypt' | 'tls-crypt-v2';
+        url: string;
+    }[];
 
     constructor(data: SubscriptionRawResponse) {
         this.isFound = data.isFound;
@@ -27,5 +34,6 @@ export class SubscriptionRawResponse {
         this.links = data.links || [];
         this.ssConfLinks = data.ssConfLinks || {};
         this.subscriptionUrl = data.subscriptionUrl;
+        this.openVpnProfiles = data.openVpnProfiles ?? [];
     }
 }

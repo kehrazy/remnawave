@@ -76,6 +76,7 @@ model Users {
   userMetas                      UserMeta[]
   torrentBlockerReports          TorrentBlockerReports[]
   traffic                        UserTraffic?
+  openVpnUsage                   OpenVpnUserUsage[]
 
   externalSquad ExternalSquads? @relation(fields: [externalSquadUuid], references: [uuid], onDelete: SetNull)
 
@@ -98,6 +99,47 @@ model UserTraffic {
   lastConnectedNode Nodes? @relation(fields: [lastConnectedNodeUuid], references: [uuid], onDelete: SetNull)
 
   @@map("user_traffic")
+}
+
+model OpenVpnEndpoint {
+  uuid               String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  nodeUuid           String   @map("node_uuid") @db.Uuid
+  name               String   @db.VarChar(128)
+  address            String   @db.VarChar(253)
+  port               Int
+  protocol           String   @db.VarChar(3)
+  controlChannel     String   @map("control_channel") @db.VarChar(16)
+  udpMask            String   @default("none") @map("udp_mask") @db.VarChar(16)
+  network            String   @db.VarChar(18)
+  dnsServers         String[] @map("dns_servers")
+  egressAddress      String?  @map("egress_address") @db.VarChar(15)
+  relayTargetUuid    String?  @map("relay_target_uuid") @db.Uuid
+  internalSquadUuids String[] @default([]) @map("internal_squad_uuids") @db.Uuid
+  isDisabled         Boolean  @default(false) @map("is_disabled")
+  createdAt          DateTime @default(now()) @map("created_at")
+  updatedAt          DateTime @default(now()) @updatedAt @map("updated_at")
+
+  node Nodes @relation(fields: [nodeUuid], references: [uuid], onDelete: Cascade)
+  relayTarget OpenVpnEndpoint? @relation("OpenVpnRelay", fields: [relayTargetUuid], references: [uuid], onDelete: Restrict)
+  relays OpenVpnEndpoint[] @relation("OpenVpnRelay")
+
+  @@unique([nodeUuid, protocol, port])
+  @@index([relayTargetUuid])
+  @@map("openvpn_endpoints")
+}
+
+model OpenVpnUserUsage {
+  nodeUuid String @map("node_uuid") @db.Uuid
+  userId   BigInt @map("user_id")
+  epoch    String @db.Uuid
+  uplink   BigInt @default(0)
+  downlink BigInt @default(0)
+
+  node Nodes @relation(fields: [nodeUuid], references: [uuid], onDelete: Cascade)
+  user Users @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([nodeUuid, userId])
+  @@map("openvpn_user_usage")
 }
 
 model ApiTokens {
@@ -198,6 +240,8 @@ model Nodes {
   tags         String[] @default([]) @map("tags")
 
   integrationUuids String[] @default([]) @map("integration_uuids") @db.Uuid
+  openVpnEndpoints OpenVpnEndpoint[]
+  openVpnUsage OpenVpnUserUsage[]
 
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @default(now()) @updatedAt @map("updated_at")

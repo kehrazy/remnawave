@@ -1,0 +1,478 @@
+import type { Nodes, OpenVpnEndpoint, Prisma } from '@prisma/client';
+
+import { randomUUID } from 'node:crypto';
+
+import {
+    BadGatewayException,
+    BadRequestException,
+    Injectable,
+    Logger,
+    NotFoundException,
+    OnApplicationBootstrap,
+    OnModuleDestroy,
+} from '@nestjs/common';
+import { OnEvent } from '@nestjs/event-emitter';
+
+import { AxiosService, type INodeConnectionOpts } from '@common/axios';
+import { PrismaService } from '@common/database/prisma.service';
+
+import {
+    CreateOpenVpnEndpointSchema,
+    OpenVpnUsageSchema,
+    type OpenVpnEndpointInput,
+    type OpenVpnProfile,
+} from './openvpn.schemas';
+
+type Endpoint = OpenVpnEndpoint & { node: Nodes };
+type Account = Prisma.UsersGetPayload<{
+    include: { traffic: true; activeInternalSquads: true; externalSquad: true };
+}>;
+
+@Injectable()
+export class OpenVpnService implements OnApplicationBootstrap, OnModuleDestroy {
+    private readonly logger = new Logger(OpenVpnService.name);
+    private readonly health = new Map<string, { running: boolean; error: string | null }>();
+    private timer: ReturnType<typeof setInterval> | undefined;
+    private reconciling: Promise<void> | null = null;
+    private resyncRequested = false;
+    private nodeReady: Promise<void> | null = null;
+
+    constructor(
+        private readonly prisma: PrismaService,
+        private readonly axios: AxiosService,
+    ) {}
+
+    onApplicationBootstrap(): void {
+        this.timer = setInterval(() => this.onChanged(), 15_000);
+        this.timer.unref();
+        this.onChanged();
+    }
+
+    onModuleDestroy(): void {
+        clearInterval(this.timer);
+    }
+
+    @OnEvent('user.*')
+    @OnEvent('node.*')
+    onChanged(): void {
+        void this.sync().catch((error: unknown) =>
+            this.logger.error(`OpenVPN reconciliation failed: ${String(error)}`),
+        );
+    }
+
+    private async nodeRequest<T>(
+        node: INodeConnectionOpts,
+        path: string,
+        data?: unknown,
+    ): Promise<T> {
+        this.nodeReady ??= this.axios.setJwt().catch((error: unknown) => {
+            this.nodeReady = null;
+            throw error;
+        });
+        await this.nodeReady;
+        const result = await this.axios.request<{ response: T }>({
+            label: 'OPENVPN',
+            opts: node,
+            path: `/openvpn${path}`,
+            method: data === undefined ? 'get' : 'post',
+            data,
+            timeout: 30_000,
+            logAxiosError: false,
+        });
+        if (!result.isOk)
+            throw new BadGatewayException('OpenVPN node request failed; inspect node health');
+        return result.response;
+    }
+
+    private accountAllowed(user: Account, hwidEnabled: boolean): boolean {
+        const hwidOverride = user.externalSquad?.hwidSettings as
+            | { enabled?: boolean }
+            | null
+            | undefined;
+        return (
+            user.status === 'ACTIVE' &&
+            user.expireAt.getTime() > Date.now() &&
+            !(hwidOverride?.enabled ?? hwidEnabled) &&
+            (user.trafficLimitBytes === 0n ||
+                (user.traffic?.usedTrafficBytes ?? 0n) < user.trafficLimitBytes)
+        );
+    }
+
+    private endpointAllowed(endpoint: Endpoint, user: Account): boolean {
+        return (
+            !endpoint.isDisabled &&
+            !endpoint.node.isDisabled &&
+            (!endpoint.node.isTrafficTrackingActive ||
+                !endpoint.node.trafficLimitBytes ||
+                (endpoint.node.trafficUsedBytes ?? 0n) < endpoint.node.trafficLimitBytes) &&
+            (endpoint.internalSquadUuids.length === 0 ||
+                user.activeInternalSquads.some((member) =>
+                    endpoint.internalSquadUuids.includes(member.internalSquadUuid),
+                ))
+        );
+    }
+
+    private wireEndpoint(endpoint: Endpoint, endpoints: Endpoint[]) {
+        const target = endpoint.relayTargetUuid
+            ? endpoints.find((item) => item.uuid === endpoint.relayTargetUuid)
+            : null;
+        if (endpoint.relayTargetUuid && (!target || target.relayTargetUuid)) {
+            throw new BadRequestException('A relay must target an OpenVPN server endpoint');
+        }
+        return {
+            uuid: endpoint.uuid,
+            name: endpoint.name,
+            address: endpoint.address,
+            port: endpoint.port,
+            protocol: endpoint.protocol,
+            controlChannel: endpoint.controlChannel,
+            udpMask: endpoint.udpMask,
+            network: endpoint.network,
+            dnsServers: endpoint.dnsServers,
+            egressAddress: endpoint.egressAddress,
+            mode: target ? 'relay' : 'server',
+            targetAddress: target?.address ?? null,
+            targetPort: target?.port ?? null,
+            isDisabled:
+                endpoint.isDisabled ||
+                endpoint.node.isDisabled ||
+                Boolean(target?.isDisabled || target?.node.isDisabled),
+        };
+    }
+
+    async list() {
+        const endpoints = await this.prisma.openVpnEndpoint.findMany({
+            include: { node: { select: { uuid: true, name: true } } },
+            orderBy: { createdAt: 'asc' },
+        });
+        return endpoints.map((endpoint) => ({
+            ...endpoint,
+            health: this.health.get(endpoint.uuid) ?? {
+                running: false,
+                error: 'Not reconciled yet',
+            },
+        }));
+    }
+
+    async create(input: OpenVpnEndpointInput) {
+        const data = CreateOpenVpnEndpointSchema.parse(input);
+        if (data.udpMask !== 'none' && (data.protocol !== 'udp' || data.relayTargetUuid))
+            throw new BadRequestException('UDP masking requires a UDP server endpoint');
+        const node = await this.prisma.nodes.findUnique({ where: { uuid: data.nodeUuid } });
+        if (!node) throw new NotFoundException('Node not found');
+        const endpoints = await this.prisma.openVpnEndpoint.findMany({ include: { node: true } });
+        if (data.relayTargetUuid) {
+            const target = endpoints.find((endpoint) => endpoint.uuid === data.relayTargetUuid);
+            if (
+                !target ||
+                target.relayTargetUuid ||
+                target.nodeUuid === data.nodeUuid ||
+                target.protocol !== data.protocol
+            ) {
+                throw new BadRequestException(
+                    'Relay target must be a server on another node with the same transport',
+                );
+            }
+            data.controlChannel = target.controlChannel as OpenVpnEndpointInput['controlChannel'];
+        }
+        const endpoint = {
+            ...data,
+            uuid: randomUUID(),
+            createdAt: new Date(),
+            updatedAt: new Date(),
+            node,
+        };
+        await this.nodeRequest(node, '/endpoints', this.wireEndpoint(endpoint, endpoints));
+        let saved: OpenVpnEndpoint;
+        try {
+            saved = await this.prisma.openVpnEndpoint.create({
+                data: { ...data, uuid: endpoint.uuid },
+            });
+        } catch (error) {
+            await this.nodeRequest(node, `/endpoints/${endpoint.uuid}/remove`, {}).catch(
+                () => undefined,
+            );
+            throw error;
+        }
+        this.onChanged();
+        return saved;
+    }
+
+    async update(uuid: string, patch: Partial<OpenVpnEndpointInput>) {
+        const current = await this.prisma.openVpnEndpoint.findUnique({
+            where: { uuid },
+            include: { node: true },
+        });
+        if (!current) throw new NotFoundException('OpenVPN endpoint not found');
+        const data = CreateOpenVpnEndpointSchema.parse({ ...current, ...patch });
+        if (data.udpMask !== 'none' && (data.protocol !== 'udp' || data.relayTargetUuid))
+            throw new BadRequestException('UDP masking requires a UDP server endpoint');
+        if (
+            data.nodeUuid !== current.nodeUuid ||
+            data.controlChannel !== current.controlChannel ||
+            data.relayTargetUuid !== current.relayTargetUuid
+        ) {
+            throw new BadRequestException(
+                'Create another endpoint to change its node or credential source',
+            );
+        }
+        if (
+            data.protocol !== current.protocol &&
+            (await this.prisma.openVpnEndpoint.count({ where: { relayTargetUuid: uuid } }))
+        ) {
+            throw new BadRequestException(
+                'Update or remove relays before changing server transport',
+            );
+        }
+        const endpoints = await this.prisma.openVpnEndpoint.findMany({ include: { node: true } });
+        const next = { ...current, ...data };
+        await this.nodeRequest(current.node, '/endpoints', this.wireEndpoint(next, endpoints));
+        let saved: OpenVpnEndpoint;
+        try {
+            saved = await this.prisma.openVpnEndpoint.update({ where: { uuid }, data });
+        } catch (error) {
+            await this.nodeRequest(
+                current.node,
+                '/endpoints',
+                this.wireEndpoint(current, endpoints),
+            ).catch(() => undefined);
+            throw error;
+        }
+        this.onChanged();
+        return saved;
+    }
+
+    async remove(uuid: string): Promise<void> {
+        const endpoint = await this.prisma.openVpnEndpoint.findUnique({
+            where: { uuid },
+            include: { node: true },
+        });
+        if (!endpoint) throw new NotFoundException('OpenVPN endpoint not found');
+        if (await this.prisma.openVpnEndpoint.count({ where: { relayTargetUuid: uuid } })) {
+            throw new BadRequestException('Remove the relays using this server first');
+        }
+        await this.nodeRequest(endpoint.node, `/endpoints/${uuid}/remove`, {});
+        await this.prisma.openVpnEndpoint.delete({ where: { uuid } });
+        this.health.delete(uuid);
+    }
+
+    async profiles(shortUuid: string): Promise<OpenVpnProfile[]> {
+        const user = await this.prisma.users.findUnique({
+            where: { shortUuid },
+            include: { traffic: true, activeInternalSquads: true, externalSquad: true },
+        });
+        const settings = await this.prisma.subscriptionSettings.findFirst({
+            select: { hwidSettings: true },
+        });
+        const hwid = Boolean((settings?.hwidSettings as { enabled?: boolean } | null)?.enabled);
+        if (!user || !this.accountAllowed(user, hwid)) return [];
+        const endpoints = await this.prisma.openVpnEndpoint.findMany({
+            include: { node: true },
+            orderBy: { createdAt: 'asc' },
+        });
+        return endpoints
+            .filter((endpoint) => {
+                if (!this.endpointAllowed(endpoint, user)) return false;
+                const target = endpoint.relayTargetUuid
+                    ? endpoints.find((item) => item.uuid === endpoint.relayTargetUuid)
+                    : null;
+                return (
+                    !endpoint.relayTargetUuid ||
+                    Boolean(target && this.endpointAllowed(target, user))
+                );
+            })
+            .map((endpoint) => ({
+                uuid: endpoint.uuid,
+                name: endpoint.name,
+                protocol: endpoint.protocol as 'udp' | 'tcp',
+                controlChannel: endpoint.controlChannel as OpenVpnProfile['controlChannel'],
+                url: `/api/openvpn/subscriptions/${encodeURIComponent(shortUuid)}/${endpoint.uuid}.ovpn`,
+            }));
+    }
+
+    async profile(shortUuid: string, uuid: string): Promise<string> {
+        const allowed = await this.profiles(shortUuid);
+        if (!allowed.some((profile) => profile.uuid === uuid))
+            throw new NotFoundException('OpenVPN profile unavailable');
+        const endpoint = await this.prisma.openVpnEndpoint.findUniqueOrThrow({
+            where: { uuid },
+            include: { node: true, relayTarget: { include: { node: true } } },
+        });
+        const user = await this.prisma.users.findUniqueOrThrow({ where: { shortUuid } });
+        await this.sync();
+        const server = endpoint.relayTarget ?? endpoint;
+        const result = await this.nodeRequest<{ profile: string }>(
+            server.node,
+            `/endpoints/${server.uuid}/profile`,
+            {
+                userId: user.id.toString(),
+                address: endpoint.address,
+                port: endpoint.port,
+            },
+        );
+        return result.profile;
+    }
+
+    sync(): Promise<void> {
+        this.resyncRequested = true;
+        this.reconciling ??= this.reconcile().finally(() => {
+            this.reconciling = null;
+        });
+        return this.reconciling;
+    }
+
+    private async reconcile(): Promise<void> {
+        do {
+            this.resyncRequested = false;
+            const generation = Date.now();
+            const endpoints = await this.prisma.openVpnEndpoint.findMany({
+                include: { node: true },
+            });
+            if (!endpoints.length) return;
+            const accounts = await this.prisma.users.findMany({
+                include: { traffic: true, activeInternalSquads: true, externalSquad: true },
+            });
+            const settings = await this.prisma.subscriptionSettings.findFirst({
+                select: { hwidSettings: true },
+            });
+            const hwid = Boolean((settings?.hwidSettings as { enabled?: boolean } | null)?.enabled);
+            const nodes = new Map(endpoints.map((endpoint) => [endpoint.nodeUuid, endpoint.node]));
+            for (const node of nodes.values()) {
+                const local = endpoints.filter((endpoint) => endpoint.nodeUuid === node.uuid);
+                try {
+                    const users = accounts
+                        .filter((user) => this.accountAllowed(user, hwid))
+                        .map((user) => ({
+                            id: user.id.toString(),
+                            credentialId: user.vlessUuid,
+                            expiresAt: user.expireAt.toISOString(),
+                            endpointUuids: local
+                                .filter((endpoint) => this.endpointAllowed(endpoint, user))
+                                .map((endpoint) => endpoint.uuid),
+                        }))
+                        .filter((user) => user.endpointUuids.length > 0);
+                    await this.nodeRequest(node, '/users', { generation, users });
+                    for (const endpoint of local) {
+                        const status = await this.nodeRequest<{
+                            endpoints: { uuid: string; running: boolean; error: string | null }[];
+                        }>(node, '/endpoints', this.wireEndpoint(endpoint, endpoints));
+                        for (const entry of status.endpoints)
+                            this.health.set(entry.uuid, {
+                                running: entry.running,
+                                error: entry.error,
+                            });
+                    }
+                    await this.accountUsage(
+                        node,
+                        OpenVpnUsageSchema.parse(await this.nodeRequest(node, '/usage')),
+                    );
+                } catch (error) {
+                    for (const endpoint of local)
+                        this.health.set(endpoint.uuid, {
+                            running: false,
+                            error: error instanceof Error ? error.message : 'Node unavailable',
+                        });
+                }
+            }
+        } while (this.resyncRequested);
+    }
+
+    private async accountUsage(
+        node: Nodes,
+        usage: ReturnType<typeof OpenVpnUsageSchema.parse>,
+    ): Promise<void> {
+        await this.prisma.$transaction(
+            async (tx) => {
+                await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`openvpn:${node.uuid}`}))`;
+                const now = new Date();
+                const day = new Date(now.toISOString().slice(0, 10));
+                const hour = new Date(now);
+                hour.setUTCMinutes(0, 0, 0);
+                for (const entry of usage.users) {
+                    const userId = BigInt(entry.id);
+                    const user = await tx.users.findUnique({
+                        where: { id: userId },
+                        include: { traffic: true },
+                    });
+                    if (!user) continue;
+                    const key = { nodeUuid: node.uuid, userId };
+                    const previous = await tx.openVpnUserUsage.findUnique({
+                        where: { nodeUuid_userId: key },
+                    });
+                    const uplink = BigInt(entry.uplink);
+                    const downlink = BigInt(entry.downlink);
+                    const sameEpoch = previous?.epoch === usage.epoch;
+                    if (
+                        sameEpoch &&
+                        previous &&
+                        (uplink < previous.uplink || downlink < previous.downlink)
+                    ) {
+                        throw new Error(
+                            'OpenVPN cumulative counters decreased without an epoch change',
+                        );
+                    }
+                    const up = uplink - (sameEpoch ? previous!.uplink : 0n);
+                    const down = downlink - (sameEpoch ? previous!.downlink : 0n);
+                    const total = up + down;
+                    await tx.openVpnUserUsage.upsert({
+                        where: { nodeUuid_userId: key },
+                        create: { ...key, epoch: usage.epoch, uplink, downlink },
+                        update: { epoch: usage.epoch, uplink, downlink },
+                    });
+                    if (total === 0n && !entry.online) continue;
+                    const charged = (total * node.consumptionMultiplier) / 1_000_000_000n;
+                    await tx.userTraffic.upsert({
+                        where: { id: userId },
+                        create: {
+                            id: userId,
+                            usedTrafficBytes: charged,
+                            lifetimeUsedTrafficBytes: charged,
+                            onlineAt: now,
+                            firstConnectedAt: now,
+                            lastConnectedNodeUuid: node.uuid,
+                        },
+                        update: {
+                            usedTrafficBytes: { increment: charged },
+                            lifetimeUsedTrafficBytes: { increment: charged },
+                            onlineAt: now,
+                            firstConnectedAt: user.traffic?.firstConnectedAt ?? now,
+                            lastConnectedNodeUuid: node.uuid,
+                        },
+                    });
+                    await tx.nodesUserUsageHistory.upsert({
+                        where: {
+                            nodeId_createdAt_userId: { nodeId: node.id, createdAt: day, userId },
+                        },
+                        create: { nodeId: node.id, createdAt: day, userId, totalBytes: total },
+                        update: { totalBytes: { increment: total } },
+                    });
+                    await tx.nodesUsageHistory.upsert({
+                        where: { nodeUuid_createdAt: { nodeUuid: node.uuid, createdAt: hour } },
+                        create: {
+                            nodeUuid: node.uuid,
+                            createdAt: hour,
+                            uploadBytes: up,
+                            downloadBytes: down,
+                            totalBytes: total,
+                        },
+                        update: {
+                            uploadBytes: { increment: up },
+                            downloadBytes: { increment: down },
+                            totalBytes: { increment: total },
+                        },
+                    });
+                    await tx.nodes.update({
+                        where: { uuid: node.uuid },
+                        data: {
+                            trafficUsedBytes: {
+                                increment:
+                                    (total * node.nodeConsumptionMultiplier) / 1_000_000_000n,
+                            },
+                        },
+                    });
+                }
+            },
+            { timeout: 30_000 },
+        );
+    }
+}

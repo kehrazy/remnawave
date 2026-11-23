@@ -176,7 +176,7 @@ export class AxiosService {
             : reason;
     }
 
-    private async request<TResponse extends { response: unknown }>(
+    public async request<TResponse extends { response: unknown }>(
         params: INodeRequestOpts,
     ): Promise<TResult<TResponse['response']>> {
         const {

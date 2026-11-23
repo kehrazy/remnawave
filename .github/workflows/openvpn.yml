@@ -1,0 +1,79 @@
+name: OpenVPN panel
+on:
+  push:
+    branches: [openvpn]
+  workflow_dispatch:
+concurrency:
+  group: openvpn-${{ github.ref }}
+  cancel-in-progress: true
+permissions:
+  contents: write
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_PASSWORD: test
+          POSTGRES_DB: openvpn_test
+        ports: ['5432:5432']
+        options: --health-cmd pg_isready --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      DATABASE_URL: postgresql://postgres:test@localhost:5432/openvpn_test
+      DIRECT_URL: postgresql://postgres:test@localhost:5432/openvpn_test
+      OPENVPN_DATABASE_TEST: 'true'
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run migrate:generate
+      - run: npm run migrate:deploy
+      - run: npx tsc --noEmit
+      - run: npx tsx --test test/openvpn.test.ts
+      - run: npm run build
+  image:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Resolve tested frontend
+        id: frontend
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          sha=$(gh api repos/kehrazy/remnawave-frontend/commits/openvpn --jq .sha)
+          for attempt in $(seq 1 30); do
+            if gh release view "openvpn-${sha}" --repo kehrazy/remnawave-frontend; then break; fi
+            sleep 10
+          done
+          gh release view "openvpn-${sha}" --repo kehrazy/remnawave-frontend
+          echo "url=https://github.com/kehrazy/remnawave-frontend/releases/download/openvpn-${sha}/remnawave-frontend.zip" >> "$GITHUB_OUTPUT"
+      - uses: docker/setup-buildx-action@v4
+      - uses: docker/build-push-action@v7
+        with:
+          context: .
+          build-args: |
+            FRONTEND_URL=${{ steps.frontend.outputs.url }}
+            __RW_METADATA_GIT_BACKEND_COMMIT=${{ github.sha }}
+            __RW_METADATA_GIT_BRANCH=openvpn
+          tags: remnawave-openvpn:${{ github.sha }}
+          outputs: type=docker,dest=/tmp/remnawave-openvpn.tar
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: Publish image archive
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gzip -1 /tmp/remnawave-openvpn.tar
+          cd /tmp
+          sha256sum remnawave-openvpn.tar.gz > remnawave-openvpn.tar.gz.sha256
+          gh release create "openvpn-${GITHUB_SHA}" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --prerelease --title "OpenVPN ${GITHUB_SHA:0:12}" --notes "Panel image with first-class OpenVPN endpoints, profiles and accounting."
+          gh release upload "openvpn-${GITHUB_SHA}" remnawave-openvpn.tar.gz remnawave-openvpn.tar.gz.sha256 --repo "$GITHUB_REPOSITORY"

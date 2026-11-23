@@ -4,6 +4,9 @@ Backend for Remnawave Panel.
 
 Learn more about Remnawave Panel [here](https://docs.rw/).
 
+This fork adds managed OpenVPN endpoints and per-account `.ovpn` downloads while
+retaining Xray subscriptions. See [OpenVPN deployment and API](docs/openvpn.md).
+
 # Contributors
 
 We ❤️‍🔥 contributors! If you'd like to contribute, please check out our [Contributing Guidelines](CONTRIBUTING.md) and feel free to submit a pull request or open an issue.
