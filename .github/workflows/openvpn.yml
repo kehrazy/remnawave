@@ -58,7 +58,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          sha=$(gh api repos/kehrazy/remnawave-frontend/commits/openvpn --jq .sha)
+          sha=$(cat frontend-revision)
           for attempt in $(seq 1 30); do
             if gh release view "openvpn-${sha}" --repo kehrazy/remnawave-frontend; then break; fi
             sleep 10
