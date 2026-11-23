@@ -208,7 +208,7 @@ export const ERRORS = {
     },
     NODE_HAS_OPENVPN_ENDPOINTS: {
         code: 'A259',
-        message: 'Remove the node OpenVPN endpoints before deleting it',
+        message: 'Remove the node managed VPN endpoints before deleting it',
         httpCode: 409,
     },
     DELETE_NODE_ERROR: {

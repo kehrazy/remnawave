@@ -232,7 +232,8 @@ export class NodesService {
                 return fail(ERRORS.NODE_NOT_FOUND);
             }
 
-            if (await this.prisma.openVpnEndpoint.count({ where: { nodeUuid: node.uuid } })) {
+            if (await this.prisma.openVpnEndpoint.count({ where: { nodeUuid: node.uuid } }) ||
+                await this.prisma.amneziaWgEndpoint.count({ where: { nodeUuid: node.uuid } })) {
                 return fail(ERRORS.NODE_HAS_OPENVPN_ENDPOINTS);
             }
 

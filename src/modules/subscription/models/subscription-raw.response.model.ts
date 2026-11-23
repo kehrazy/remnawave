@@ -28,6 +28,8 @@ export class SubscriptionRawResponse {
         url: string;
     }[];
 
+    public amneziaWgProfiles?: { uuid: string; name: string; generation: string; url: string }[];
+
     constructor(data: SubscriptionRawResponse) {
         this.isFound = data.isFound;
         this.user = data.user;
@@ -35,5 +37,6 @@ export class SubscriptionRawResponse {
         this.ssConfLinks = data.ssConfLinks || {};
         this.subscriptionUrl = data.subscriptionUrl;
         this.openVpnProfiles = data.openVpnProfiles ?? [];
+        this.amneziaWgProfiles = data.amneziaWgProfiles ?? [];
     }
 }

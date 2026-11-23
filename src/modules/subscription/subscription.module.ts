@@ -8,13 +8,14 @@ import { SUBSCRIPTION_CONTROLLER, SUBSCRIPTION_ROUTES } from '@libs/contracts/ap
 import { ResponseRulesMiddleware } from '@modules/subscription-response-rules/middleware/response-rules.middleware';
 import { SubscriptionResponseRulesModule } from '@modules/subscription-response-rules/subscription-response-rules.module';
 import { SubscriptionTemplateModule } from '@modules/subscription-template/subscription-template.module';
+import { AmneziaWgModule } from '@modules/amneziawg/amneziawg.module';
 import { OpenVpnModule } from '@modules/openvpn/openvpn.module';
 
 import { SubscriptionController, SubscriptionsController } from './controllers';
 import { SubscriptionService } from './subscription.service';
 
 @Module({
-    imports: [CqrsModule, SubscriptionTemplateModule, SubscriptionResponseRulesModule, OpenVpnModule],
+    imports: [CqrsModule, SubscriptionTemplateModule, SubscriptionResponseRulesModule, OpenVpnModule, AmneziaWgModule],
     controllers: [SubscriptionController, SubscriptionsController],
     providers: [SubscriptionService],
     exports: [],

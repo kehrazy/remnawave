@@ -22,6 +22,7 @@ export const SubscriptionInfoSchema = z.object({
     links: z.array(z.string()),
     ssConfLinks: z.record(z.string(), z.string()),
     subscriptionUrl: z.string(),
+    amneziaWgProfiles: z.array(z.object({ uuid: z.uuid(), name: z.string(), generation: z.string(), url: z.string() })).optional(),
     openVpnProfiles: z
         .array(
             z.object({

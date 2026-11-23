@@ -174,6 +174,7 @@ export class OpenVpnService implements OnApplicationBootstrap, OnModuleDestroy {
                 data.controlChannel =
                     target.controlChannel as OpenVpnEndpointInput['controlChannel'];
             }
+            await this.checkAllocation(data);
             const endpoint = {
                 ...data,
                 uuid: randomUUID(),
@@ -230,6 +231,7 @@ export class OpenVpnService implements OnApplicationBootstrap, OnModuleDestroy {
             const endpoints = await this.prisma.openVpnEndpoint.findMany({
                 include: { node: true },
             });
+            await this.checkAllocation(data);
             const next = { ...current, ...data };
             await this.nodeRequest(current.node, '/endpoints', this.wireEndpoint(next, endpoints));
             let saved: OpenVpnEndpoint;
@@ -262,6 +264,13 @@ export class OpenVpnService implements OnApplicationBootstrap, OnModuleDestroy {
             await this.prisma.openVpnEndpoint.delete({ where: { uuid } });
             this.health.delete(uuid);
         });
+    }
+
+    private async checkAllocation(data: OpenVpnEndpointInput): Promise<void> {
+        const awg = await this.prisma.amneziaWgEndpoint.findMany({ where: { nodeUuid: data.nodeUuid } });
+        if (awg.some((other) => (data.protocol === 'udp' && other.port === data.port) ||
+            (!data.relayTargetUuid && !other.relayTargetUuid && other.network === data.network)))
+            throw new BadRequestException('VPN port or tunnel subnet is already assigned on this node');
     }
 
     async profiles(shortUuid: string): Promise<OpenVpnProfile[]> {

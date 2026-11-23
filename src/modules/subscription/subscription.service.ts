@@ -33,6 +33,7 @@ import { RenderTemplatesService } from '@modules/subscription-template/render-te
 import { ResolvedProxyConfig } from '@modules/subscription-template/resolve-proxy/interfaces';
 import { ResolveProxyConfigService } from '@modules/subscription-template/resolve-proxy/resolve-proxy-config.service';
 import { UserEntity } from '@modules/users/entities/user.entity';
+import { AmneziaWgService } from '@modules/amneziawg/amneziawg.service';
 import { OpenVpnService } from '@modules/openvpn/openvpn.service';
 import { GetFullUserResponseModel } from '@modules/users/models';
 import { GetUserByUniqueFieldQuery } from '@modules/users/queries/get-user-by-unique-field';
@@ -75,6 +76,7 @@ export class SubscriptionService {
         private readonly usersQueuesService: UsersQueuesService,
         private readonly srrMatcher: ResponseRulesMatcherService,
         private readonly openVpnService: OpenVpnService,
+        private readonly amneziaWgService: AmneziaWgService,
     ) {
         this.subPublicDomain = this.configService.getOrThrow('SUB_PUBLIC_DOMAIN');
     }
@@ -561,6 +563,9 @@ export class SubscriptionService {
             openVpnProfiles: (await this.openVpnService.profiles(user.shortUuid)).map((profile) => ({
                 ...profile,
                 url: `${this.resolveSubscriptionUrl(user.shortUuid)}/openvpn/${profile.uuid}`,
+            })),
+            amneziaWgProfiles: (await this.amneziaWgService.profiles(user.shortUuid)).map((profile) => ({
+                ...profile, url: `${this.resolveSubscriptionUrl(user.shortUuid)}/amneziawg/${profile.uuid}`,
             })),
             subscriptionUrl: this.resolveSubscriptionUrl(user.shortUuid),
         });

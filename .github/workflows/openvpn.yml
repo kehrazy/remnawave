@@ -35,7 +35,7 @@ jobs:
       - run: npm run migrate:generate
       - run: npm run migrate:deploy
       - run: npx tsc --noEmit
-      - run: npx tsx --test test/openvpn.test.ts
+      - run: npx tsx --test --test-concurrency=1 test/openvpn.test.ts test/amneziawg.test.ts
       - run: npm run build
   image:
     needs: test
