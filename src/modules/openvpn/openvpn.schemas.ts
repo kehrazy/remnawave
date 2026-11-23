@@ -31,7 +31,17 @@ export const CreateOpenVpnEndpointSchema = z.object({
     isDisabled: z.boolean().default(false),
 });
 
-export const UpdateOpenVpnEndpointSchema = CreateOpenVpnEndpointSchema.partial();
+export const UpdateOpenVpnEndpointSchema = z.object({
+    ...CreateOpenVpnEndpointSchema.shape,
+    protocol: CreateOpenVpnEndpointSchema.shape.protocol.removeDefault(),
+    controlChannel: CreateOpenVpnEndpointSchema.shape.controlChannel.removeDefault(),
+    udpMask: CreateOpenVpnEndpointSchema.shape.udpMask.removeDefault(),
+    dnsServers: CreateOpenVpnEndpointSchema.shape.dnsServers.removeDefault(),
+    egressAddress: CreateOpenVpnEndpointSchema.shape.egressAddress.removeDefault(),
+    relayTargetUuid: CreateOpenVpnEndpointSchema.shape.relayTargetUuid.removeDefault(),
+    internalSquadUuids: CreateOpenVpnEndpointSchema.shape.internalSquadUuids.removeDefault(),
+    isDisabled: CreateOpenVpnEndpointSchema.shape.isDisabled.removeDefault(),
+}).partial();
 export type OpenVpnEndpointInput = z.infer<typeof CreateOpenVpnEndpointSchema>;
 export class CreateOpenVpnEndpointDto extends createZodDto(CreateOpenVpnEndpointSchema) {}
 export class UpdateOpenVpnEndpointDto extends createZodDto(UpdateOpenVpnEndpointSchema) {}

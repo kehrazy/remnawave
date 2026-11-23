@@ -6,7 +6,15 @@ import { randomUUID } from 'node:crypto';
 import { test } from 'node:test';
 
 import { PrismaService } from '../src/common/database/prisma.service';
+import { UpdateOpenVpnEndpointSchema } from '../src/modules/openvpn/openvpn.schemas';
 import { OpenVpnService } from '../src/modules/openvpn/openvpn.service';
+
+test('partial endpoint edits preserve omitted credential and transport fields', () => {
+    assert.deepEqual(UpdateOpenVpnEndpointSchema.parse({ isDisabled: true }), { isDisabled: true });
+    assert.deepEqual(UpdateOpenVpnEndpointSchema.parse({ name: 'Renamed' }), { name: 'Renamed' });
+    assert.deepEqual(UpdateOpenVpnEndpointSchema.parse({ udpMask: 'none' }), { udpMask: 'none' });
+    assert.deepEqual(UpdateOpenVpnEndpointSchema.parse({ relayTargetUuid: null }), { relayTargetUuid: null });
+});
 
 test(
     'subscriptions enforce account policy and charge cumulative node counters exactly once',
