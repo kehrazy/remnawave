@@ -649,6 +649,14 @@ export class NativeVpnService implements OnApplicationBootstrap, OnModuleDestroy
                 const generation = Date.now();
                 await Promise.all(
                     nodes.map(async (node) => {
+                        if (
+                            node.isDisabled &&
+                            !bindings.some((binding) => binding.nodeUuid === node.uuid)
+                        ) {
+                            this.states.delete(node.uuid);
+                            this.agents.delete(node.uuid);
+                            return;
+                        }
                         const engines: NodeEngine[] = [];
                         let runtime: AgentRuntime | null = null;
                         try {

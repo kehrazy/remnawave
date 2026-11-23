@@ -97,6 +97,10 @@ for (const engine of ['openvpn', 'amneziawg'] as const)
                     }),
                 ),
             );
+            const inactiveNode = await prisma.nodes.create({
+                data: { name: randomUUID(), address: randomUUID(), isDisabled: true },
+            });
+            nodes.push(inactiveNode);
             const users = await Promise.all(
                 [0, 1].map(() =>
                     prisma.users.create({
@@ -240,6 +244,8 @@ for (const engine of ['openvpn', 'amneziawg'] as const)
                     path: string;
                     data?: any;
                 }) => {
+                    if (opts.uuid === inactiveNode.uuid)
+                        throw new Error('Unassigned inactive agents must not be contacted');
                     calls.push(path);
                     if (path === '/node/runtime')
                         return {

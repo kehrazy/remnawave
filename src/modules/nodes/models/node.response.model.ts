@@ -57,8 +57,8 @@ export class NodeResponseModel {
         this.address = data.address;
         this.port = data.port;
         this.proxyUrl = data.proxyUrl;
-        this.isConnected = data.isConnected;
-        this.isConnecting = data.isConnecting;
+        this.isConnected = !data.isDisabled && data.isConnected;
+        this.isConnecting = !data.isDisabled && data.isConnecting;
         this.isDisabled = data.isDisabled;
         this.lastStatusChange = data.lastStatusChange;
         this.lastStatusMessage = data.lastStatusMessage;
