@@ -10,6 +10,7 @@ import { CreateAmneziaWgEndpointSchema, UpdateAmneziaWgEndpointSchema } from '..
 
 test('AmneziaWG PATCH preserves omitted fields and validates obfuscation inputs', () => {
     assert.deepEqual(UpdateAmneziaWgEndpointSchema.parse({ isDisabled: true }), { isDisabled: true });
+    assert.equal(CreateAmneziaWgEndpointSchema.safeParse({ nodeUuid: randomUUID(), name: 'Test', address: '192.0.2.1', port: 5443, network: '10.93.0.0/24', generation: '2.0', parameters: { RandomTrailers: false } }).success, false);
     assert.equal(CreateAmneziaWgEndpointSchema.safeParse({ nodeUuid: randomUUID(), name: 'Test', address: '192.0.2.1', port: 5443, network: '10.93.0.0/24', parameters: { I1: '<r -1>' } }).success, false);
 });
 
